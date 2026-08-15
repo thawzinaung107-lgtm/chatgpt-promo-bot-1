@@ -105,7 +105,7 @@ The same command accepts JSON:
 {"groups":[{"name":"AI Myanmar","description":"AI tools","member_count":"12K"}]}
 ```
 
-For a file workflow, upload a UTF-8 `.txt`, `.csv`, or `.json` file, reply to it with `/groupscan AI tools`, and the bot will parse the metadata. Use `/id` in a group to see its chat ID, then set `GROUPSCAN_ALLOWED_CHAT_IDS` if scanning should be limited to specific chats.
+For a file workflow, upload a UTF-8 `.txt`, `.csv`, or `.json` file, reply to it with `/groupscan AI tools`, and the bot will parse the metadata. Use `/id` in a group to see its chat ID, then set `GROUPSCAN_ALLOWED_CHAT_IDS` if scanning should be limited to specific chats. See the dedicated Burmese [GroupScan Usage Guide](GROUPSCAN_USAGE_GUIDE.md) for step-by-step examples and troubleshooting.
 
 The bot treats member count as supplied context only. It does not claim that a group is active or high quality merely because it has more members.
 
