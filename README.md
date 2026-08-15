@@ -12,6 +12,7 @@ The model is instructed not to invent facts, news, statistics, engagement, or gr
 
 | Workflow | Command | Behavior |
 |---|---|---|
+| General AI agent | `/agent <request>` | Uses the configured Telegram strategist identity to answer content, campaign, curation, and growth requests in Burmese by default. |
 | Content creation | `/post <source>` | Converts source material into a Burmese Telegram post with hook, short sections, restrained emojis, and CTA. |
 | Content curation | `/curate <content>` | Classifies the content and drafts a 1–2 sentence context intro without sending anything. |
 | GroupScan scouting | `/groupscan <niche>` or `/scout <niche>` | Scores niche fit, flags spam or irrelevance, and returns `target`, `review`, or `exclude`. Accepts pipe-delimited text, CSV, JSON, or a replied UTF-8 text file. |
@@ -21,14 +22,19 @@ The model is instructed not to invent facts, news, statistics, engagement, or gr
 
 ## Configuration
 
-Copy `.env.example` to `.env` for local development, or add the same values as environment variables in the hosting dashboard. Never commit real credentials.
+Copy `.env.example` to `.env` for local development, or add the same values as environment variables in the hosting dashboard. The bot loads `.env` automatically through `python-dotenv`. Never commit real credentials.
 
 | Variable | Required | Description |
 |---|---:|---|
 | `BOT_TOKEN` | Yes | Token created through [@BotFather](https://t.me/BotFather). |
-| `LLM_API_KEY` | Yes | API key for the configured OpenAI-compatible language-model endpoint. |
-| `LLM_BASE_URL` | No | Optional compatible API base URL. Leave blank for the provider default. |
-| `LLM_MODEL` | No | Model ID; defaults to `gpt-5-mini`. |
+| `LLM_API_KEY` | Yes | API key for the configured OpenAI-compatible language-model endpoint. Local aliases `OPENAI_API_KEY` is also accepted. |
+| `LLM_BASE_URL` | No | Compatible API root, usually ending in `/v1`; full `/chat/completions` URLs are normalized. Local alias `OPENAI_API_BASE` is also accepted. |
+| `LLM_MODEL` | No | Provider model ID. Local alias `OPENAI_MODEL` is also accepted. |
+| `LLM_RESPONSE_FORMAT` | No | `auto`, `json_schema`, `json_object`, or `none`; defaults to `auto` and falls back for providers without strict schema support. |
+| `LLM_MAX_TOKENS_PARAM` | No | `auto`, `max_tokens`, or `max_completion_tokens`; defaults to model-aware `auto`. |
+| `LLM_TIMEOUT_SECONDS` | No | Request timeout; defaults to `60`. |
+| `LLM_MAX_RETRIES` | No | SDK retry count; defaults to `2`. |
+| `LLM_REASONING_EFFORT` | No | Optional GPT-5 reasoning effort: `minimal`, `low`, `medium`, or `high`. |
 | `ADMIN_IDS` | Recommended | Comma-separated Telegram numeric user IDs allowed to use `/forward` and `/targets`. |
 | `TARGETS_JSON` | Required for forwarding | JSON object or array containing `chat_id`, `label`, `description`, and optional `allowed_categories`. |
 | `MAX_INPUT_CHARS` | No | Maximum prompt size; defaults to `8000`. |
@@ -63,6 +69,18 @@ cp .env.example .env
 python bot.py
 ```
 
+For a generic OpenAI-compatible provider, configure the connection like this:
+
+```dotenv
+LLM_API_KEY=your_provider_key
+LLM_BASE_URL=https://provider.example.com/v1
+LLM_MODEL=provider_model_name
+LLM_RESPONSE_FORMAT=auto
+LLM_MAX_TOKENS_PARAM=auto
+```
+
+The bot first attempts strict JSON Schema output, then falls back to JSON mode and finally plain JSON parsing when the provider does not support the stronger format. The model, API key, and base URL are never sent to Telegram users.
+
 Example GroupScan input:
 
 ```text
@@ -88,7 +106,7 @@ The included `render.yaml` starts the polling process from `bot.py`. Add the env
 
 ## Implementation notes
 
-The bot uses structured JSON responses for post creation, curation, and GroupScan. Every GroupScan result must contain exactly one matching result per supplied group; malformed or incomplete results are rejected. The integration intentionally does not execute the attached network-reconnaissance code, perform host/port scans, enumerate subdomains, probe SNI/VPN handshakes, or search for CDN origin IPs. Model calls run in a worker thread so the asynchronous Telegram update loop remains responsive.
+The bot uses structured JSON responses for the general agent, post creation, curation, and GroupScan. Every GroupScan result must contain exactly one matching result per supplied group; malformed or incomplete results are rejected. The integration intentionally does not execute the attached network-reconnaissance code, perform host/port scans, enumerate subdomains, probe SNI/VPN handshakes, or search for CDN origin IPs. Model calls run in a worker thread so the asynchronous Telegram update loop remains responsive.
 
 ## References
 

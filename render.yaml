@@ -12,7 +12,17 @@ services:
       - key: LLM_BASE_URL
         sync: false
       - key: LLM_MODEL
-        value: gpt-5-mini
+        sync: false
+      - key: LLM_RESPONSE_FORMAT
+        value: auto
+      - key: LLM_MAX_TOKENS_PARAM
+        value: auto
+      - key: LLM_TIMEOUT_SECONDS
+        value: "60"
+      - key: LLM_MAX_RETRIES
+        value: "2"
+      - key: LLM_REASONING_EFFORT
+        sync: false
       - key: ADMIN_IDS
         sync: false
       - key: TARGETS_JSON

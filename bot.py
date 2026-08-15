@@ -13,10 +13,11 @@ import os
 import re
 from typing import Any
 
+from dotenv import load_dotenv
 from openai import OpenAI
 from telegram import BotCommand, Update
 from telegram.error import TelegramError
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from groupscan import (
     GroupScanInputError,
@@ -28,6 +29,7 @@ from groupscan import (
 )
 
 
+load_dotenv()
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -94,6 +96,19 @@ CURATION_SCHEMA = {
 }
 
 
+AGENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "mode": {"type": "string"},
+        "source_facts": {"type": "array", "items": {"type": "string"}},
+        "needs_review": {"type": "boolean"},
+    },
+    "required": ["answer", "mode", "source_facts", "needs_review"],
+    "additionalProperties": False,
+}
+
+
 SCOUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -148,6 +163,17 @@ def _csv_ints(value: str | None) -> set[int]:
     return result
 
 
+def normalize_base_url(value: str | None) -> str:
+    """Normalize provider URLs while preserving OpenAI-compatible `/v1` paths."""
+    base = (value or "").strip().rstrip("/")
+    if not base:
+        return ""
+    for suffix in ("/chat/completions", "/responses", "/models"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    return base.rstrip("/")
+
+
 def _load_targets(value: str | None) -> list[dict[str, Any]]:
     if not value:
         return []
@@ -185,8 +211,11 @@ def _load_targets(value: str | None) -> list[dict[str, Any]]:
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 LLM_API_KEY = (os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")).strip()
-LLM_BASE_URL = (os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_API_BASE", "")).strip()
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
+LLM_BASE_URL = normalize_base_url(os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_API_BASE", ""))
+LLM_MODEL = (os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5-mini").strip()
+LLM_TIMEOUT_SECONDS = max(10.0, float(os.getenv("LLM_TIMEOUT_SECONDS", "60")))
+LLM_MAX_RETRIES = max(0, int(os.getenv("LLM_MAX_RETRIES", "2")))
+LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "").strip().lower()
 ADMIN_IDS = _csv_ints(os.getenv("ADMIN_IDS"))
 GROUPSCAN_ALLOWED_CHAT_IDS = _csv_ints(os.getenv("GROUPSCAN_ALLOWED_CHAT_IDS"))
 TARGETS = _load_targets(os.getenv("TARGETS_JSON"))
@@ -201,49 +230,134 @@ class ContentAgent:
     def __init__(self) -> None:
         if not LLM_API_KEY:
             raise AgentError("LLM_API_KEY or OPENAI_API_KEY is not configured")
-        client_kwargs: dict[str, Any] = {"api_key": LLM_API_KEY}
+        client_kwargs: dict[str, Any] = {
+            "api_key": LLM_API_KEY,
+            "timeout": LLM_TIMEOUT_SECONDS,
+            "max_retries": LLM_MAX_RETRIES,
+        }
         if LLM_BASE_URL:
             client_kwargs["base_url"] = LLM_BASE_URL
         self.client = OpenAI(**client_kwargs)
 
+    def _response_modes(self) -> list[str]:
+        configured = (os.getenv("LLM_RESPONSE_FORMAT", "auto") or "auto").strip().lower()
+        if configured in {"json_schema", "json_object", "none"}:
+            return [configured]
+        # Many OpenAI-compatible providers implement JSON mode but not strict JSON
+        # schema. Try the strongest contract first, then degrade safely.
+        return ["json_schema", "json_object", "none"]
+
+    def _token_parameter(self, max_tokens: int) -> dict[str, int]:
+        configured = (os.getenv("LLM_MAX_TOKENS_PARAM", "auto") or "auto").strip().lower()
+        if configured == "max_tokens":
+            return {"max_tokens": max_tokens}
+        if configured == "max_completion_tokens":
+            return {"max_completion_tokens": max_tokens}
+        model = LLM_MODEL.lower()
+        model_name = model.rsplit("/", 1)[-1]
+        if model_name.startswith(("gpt-5", "o1", "o3")):
+            return {"max_completion_tokens": max_tokens}
+        return {"max_tokens": max_tokens}
+
+    @staticmethod
+    def _json_text(content: Any) -> str:
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            text = "".join(
+                str(part.get("text", "")) if isinstance(part, dict) else str(part)
+                for part in content
+            ).strip()
+        else:
+            text = str(content or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+        if not text.startswith(("{", "[")):
+            start = text.find("{")
+            end = text.rfind("}")
+            if start >= 0 and end > start:
+                text = text[start : end + 1]
+        return text
+
     async def _structured(
         self, *, task: str, schema_name: str, schema: dict[str, Any], max_tokens: int = 2200
     ) -> dict[str, Any]:
-        request: dict[str, Any] = {
-            "model": LLM_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_IDENTITY},
-                {"role": "user", "content": task[:MAX_INPUT_CHARS]},
-            ],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": schema,
-                },
-            },
-            "max_completion_tokens": max_tokens,
-        }
-        try:
-            response = await asyncio.to_thread(
-                self.client.chat.completions.create, **request
-            )
-        except Exception as exc:
-            logger.exception("LLM request failed")
-            raise AgentError("The language model request failed") from exc
+        schema_text = json.dumps(schema, ensure_ascii=False)
+        user_task = (
+            task[:MAX_INPUT_CHARS]
+            + "\n\nReturn only one valid JSON object. It must follow this schema exactly:\n"
+            + schema_text
+        )
+        last_error: Exception | None = None
+        for response_mode in self._response_modes():
+            request: dict[str, Any] = {
+                "model": LLM_MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_IDENTITY},
+                    {"role": "user", "content": user_task},
+                ],
+                **self._token_parameter(max_tokens),
+            }
+            if response_mode == "json_schema":
+                request["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    },
+                }
+            elif response_mode == "json_object":
+                request["response_format"] = {"type": "json_object"}
+            if LLM_REASONING_EFFORT and LLM_MODEL.lower().rsplit("/", 1)[-1].startswith("gpt-5"):
+                request["extra_body"] = {"reasoning": {"effort": LLM_REASONING_EFFORT}}
 
-        content = response.choices[0].message.content if response.choices else None
-        if not content:
-            raise AgentError("The language model returned an empty response")
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError as exc:
-            logger.error("Model returned invalid JSON: %r", content[:300])
-            raise AgentError("The language model returned invalid structured data") from exc
-        if not isinstance(data, dict):
-            raise AgentError("The language model returned an unexpected shape")
-        return data
+            try:
+                response = await asyncio.to_thread(
+                    self.client.chat.completions.create, **request
+                )
+                if not response.choices:
+                    raise AgentError("The language model returned no choices")
+                message = response.choices[0].message
+                if getattr(message, "refusal", None):
+                    raise AgentError("The language model refused the request")
+                text = self._json_text(getattr(message, "content", None))
+                if not text:
+                    raise AgentError("The language model returned an empty response")
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise AgentError("The language model returned an unexpected shape")
+                return data
+            except AgentError as exc:
+                last_error = exc
+                logger.warning("Structured response mode %s failed: %s", response_mode, exc)
+            except Exception as exc:
+                last_error = exc
+                logger.warning("LLM request mode %s failed; trying fallback: %s", response_mode, exc)
+
+        logger.exception("All LLM response modes failed", exc_info=last_error)
+        raise AgentError(
+            "The language model request failed. Check LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, "
+            "and LLM_RESPONSE_FORMAT."
+        ) from last_error
+
+    async def agent(self, prompt: str) -> dict[str, Any]:
+        return await self._structured(
+            schema_name="telegram_agent_answer",
+            schema=AGENT_SCHEMA,
+            max_tokens=2600,
+            task=f"""
+Respond to the user's Telegram strategy request as the configured Content Strategist
+and Growth Manager. Default to Burmese. Choose the most useful mode, such as
+content_creation, curation, campaign_planning, audience_growth, or group_scouting.
+Use only facts supplied in the request. If the user asks for unsupported news,
+statistics, engagement, or audience claims, explain the limitation and set
+needs_review to true. Keep the answer practical, mobile-friendly, and professional.
+
+USER REQUEST:
+{prompt}
+""",
+        )
 
     async def create_post(self, source: str, language: str = "Burmese") -> dict[str, Any]:
         return await self._structured(
@@ -381,6 +495,7 @@ def is_admin(update: Update) -> bool:
 def usage_text() -> str:
     return (
         "အသုံးပြုနိုင်သော command များ\n\n"
+        "/agent <request> — AI Content Strategist အဖြစ် general request ဖြေရှင်းရန်\n"
         "/post <အချက်အလက်> — source ကို Burmese Telegram post အဖြစ်ရေးရန်\n"
         "/curate <content> — target မသတ်မှတ်ဘဲ context intro နှင့် category အကြံပြုရန်\n"
         "/groupscan <niche>\nအုပ်စုအမည် | description | members — group များစစ်ရန်\n"
@@ -403,6 +518,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(usage_text())
+
+
+async def run_agent_reply(update: Update, prompt: str) -> None:
+    if not prompt:
+        await update.message.reply_text("AI agent ကို မေးလိုသော request ထည့်ပါ။")
+        return
+    await update.message.reply_text("AI agent က စီစဉ်ပြီး ဖြေဆိုနေပါတယ်…")
+    try:
+        result = await ContentAgent().agent(prompt)
+        review = "\n\n⚠️ မှတ်ချက် — source အချက်အလက် မပြည့်စုံသဖြင့် ပြန်စစ်ရန်လိုပါသည်။" if result.get("needs_review") else ""
+        answer = str(result.get("answer", "")).strip() or "ဖြေဆိုချက် မရရှိသေးပါ။"
+        for part in chunk_text(answer + review):
+            await update.message.reply_text(part)
+    except AgentError as exc:
+        await update.message.reply_text(f"AI agent မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
+
+
+async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    prompt = full_command_payload(update)
+    reply = update.message.reply_to_message if update.message else None
+    reply_text = source_from_message(reply)
+    if reply_text:
+        prompt = f"{prompt}\n\nREFERENCE CONTENT:\n{reply_text}".strip() if prompt else reply_text
+    if not prompt:
+        await update.message.reply_text("AI agent ကို မေးလိုသော request ထည့်ပါ သို့မဟုတ် message တစ်ခုကို reply လုပ်ပြီး /agent ကိုသုံးပါ။")
+        return
+    await run_agent_reply(update, prompt)
+
+
+async def freeform_agent_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat and update.effective_chat.type == "private":
+        await run_agent_reply(update, source_from_message(update.message))
 
 
 async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -573,6 +720,7 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
             BotCommand("start", "စတင်ရန်"),
+            BotCommand("agent", "AI agent ကိုမေးရန်"),
             BotCommand("post", "Telegram post ရေးရန်"),
             BotCommand("curate", "Content curation"),
             BotCommand("groupscan", "GroupScan scouting"),
@@ -594,6 +742,7 @@ def main() -> None:
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("agent", agent_command))
     application.add_handler(CommandHandler("post", post_command))
     application.add_handler(CommandHandler("curate", curate_command))
     application.add_handler(CommandHandler("groupscan", groupscan_command))
@@ -601,6 +750,7 @@ def main() -> None:
     application.add_handler(CommandHandler("id", id_command))
     application.add_handler(CommandHandler("targets", targets_command))
     application.add_handler(CommandHandler("forward", forward_command))
+    application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, freeform_agent_message))
     application.add_error_handler(error_handler)
     logger.info("Starting Telegram Content Strategist bot with model %s", LLM_MODEL)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
