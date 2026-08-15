@@ -17,7 +17,14 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from telegram import BotCommand, Update
 from telegram.error import TelegramError
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
 from groupscan import (
     GroupScanInputError,
@@ -27,6 +34,7 @@ from groupscan import (
     render_report,
     split_niche_and_groups,
 )
+from provider_pool import ProviderPoolError, ProviderPoolStore, ProviderProfile
 
 
 load_dotenv()
@@ -220,6 +228,13 @@ ADMIN_IDS = _csv_ints(os.getenv("ADMIN_IDS"))
 GROUPSCAN_ALLOWED_CHAT_IDS = _csv_ints(os.getenv("GROUPSCAN_ALLOWED_CHAT_IDS"))
 TARGETS = _load_targets(os.getenv("TARGETS_JSON"))
 MAX_INPUT_CHARS = max(1000, int(os.getenv("MAX_INPUT_CHARS", "8000")))
+PROVIDER_POOL: ProviderPoolStore | None = None
+PROVIDER_POOL_ERROR = ""
+try:
+    PROVIDER_POOL = ProviderPoolStore.from_environment()
+except ProviderPoolError as exc:
+    PROVIDER_POOL_ERROR = str(exc)
+    logger.error("Provider pool disabled: %s", exc)
 
 
 class AgentError(RuntimeError):
@@ -227,20 +242,35 @@ class AgentError(RuntimeError):
 
 
 class ContentAgent:
-    def __init__(self) -> None:
-        if not LLM_API_KEY:
-            raise AgentError("LLM_API_KEY or OPENAI_API_KEY is not configured")
+    def __init__(self, provider: ProviderProfile | None = None) -> None:
+        selected = provider
+        if selected is None and PROVIDER_POOL is not None:
+            try:
+                selected = PROVIDER_POOL.get()
+            except ProviderPoolError as exc:
+                logger.warning("Active provider profile is invalid; using environment fallback: %s", exc)
+        self.provider_name = selected.name if selected else "environment"
+        self.api_key = selected.api_key if selected else LLM_API_KEY
+        self.base_url = normalize_base_url(selected.base_url) if selected else LLM_BASE_URL
+        self.model = selected.model if selected else LLM_MODEL
+        self.response_format = selected.response_format if selected else (os.getenv("LLM_RESPONSE_FORMAT", "auto") or "auto").strip().lower()
+        self.max_tokens_param = selected.max_tokens_param if selected else (os.getenv("LLM_MAX_TOKENS_PARAM", "auto") or "auto").strip().lower()
+        self.timeout_seconds = selected.timeout_seconds if selected else LLM_TIMEOUT_SECONDS
+        self.max_retries = selected.max_retries if selected else LLM_MAX_RETRIES
+        self.reasoning_effort = selected.reasoning_effort if selected else LLM_REASONING_EFFORT
+        if not self.api_key:
+            raise AgentError("No API key is configured. Add one with /provider_add or set LLM_API_KEY.")
         client_kwargs: dict[str, Any] = {
-            "api_key": LLM_API_KEY,
-            "timeout": LLM_TIMEOUT_SECONDS,
-            "max_retries": LLM_MAX_RETRIES,
+            "api_key": self.api_key,
+            "timeout": self.timeout_seconds,
+            "max_retries": self.max_retries,
         }
-        if LLM_BASE_URL:
-            client_kwargs["base_url"] = LLM_BASE_URL
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
         self.client = OpenAI(**client_kwargs)
 
     def _response_modes(self) -> list[str]:
-        configured = (os.getenv("LLM_RESPONSE_FORMAT", "auto") or "auto").strip().lower()
+        configured = self.response_format
         if configured in {"json_schema", "json_object", "none"}:
             return [configured]
         # Many OpenAI-compatible providers implement JSON mode but not strict JSON
@@ -248,12 +278,12 @@ class ContentAgent:
         return ["json_schema", "json_object", "none"]
 
     def _token_parameter(self, max_tokens: int) -> dict[str, int]:
-        configured = (os.getenv("LLM_MAX_TOKENS_PARAM", "auto") or "auto").strip().lower()
+        configured = self.max_tokens_param
         if configured == "max_tokens":
             return {"max_tokens": max_tokens}
         if configured == "max_completion_tokens":
             return {"max_completion_tokens": max_tokens}
-        model = LLM_MODEL.lower()
+        model = self.model.lower()
         model_name = model.rsplit("/", 1)[-1]
         if model_name.startswith(("gpt-5", "o1", "o3")):
             return {"max_completion_tokens": max_tokens}
@@ -291,7 +321,7 @@ class ContentAgent:
         last_error: Exception | None = None
         for response_mode in self._response_modes():
             request: dict[str, Any] = {
-                "model": LLM_MODEL,
+                "model": self.model,
                 "messages": [
                     {"role": "system", "content": SYSTEM_IDENTITY},
                     {"role": "user", "content": user_task},
@@ -309,8 +339,8 @@ class ContentAgent:
                 }
             elif response_mode == "json_object":
                 request["response_format"] = {"type": "json_object"}
-            if LLM_REASONING_EFFORT and LLM_MODEL.lower().rsplit("/", 1)[-1].startswith("gpt-5"):
-                request["extra_body"] = {"reasoning": {"effort": LLM_REASONING_EFFORT}}
+            if self.reasoning_effort and self.model.lower().rsplit("/", 1)[-1].startswith("gpt-5"):
+                request["extra_body"] = {"reasoning": {"effort": self.reasoning_effort}}
 
             try:
                 response = await asyncio.to_thread(
@@ -492,6 +522,38 @@ def is_admin(update: Update) -> bool:
     return bool(user and ADMIN_IDS and user.id in ADMIN_IDS)
 
 
+def provider_store_or_error() -> ProviderPoolStore | None:
+    if PROVIDER_POOL is None:
+        return None
+    return PROVIDER_POOL
+
+
+def provider_list_text() -> str:
+    if PROVIDER_POOL is None:
+        detail = PROVIDER_POOL_ERROR or "BOT_TOKEN မရှိသေးပါ။"
+        return f"Provider pool မရနိုင်သေးပါ။ {detail}"
+    profiles = PROVIDER_POOL.list_profiles()
+    lines = ["🔐 API Provider Pool", ""]
+    if not profiles:
+        lines.append("Provider profile မရှိသေးပါ။ /provider_add ဖြင့် ထည့်ပါ။")
+    for item in profiles:
+        marker = "✅ ACTIVE" if item["active"] else "○"
+        lines.append(
+            f"{marker} {item['name']} | {item['model']}\n"
+            f"  Key: {item['api_key']}\n"
+            f"  Endpoint: {item['base_url']}\n"
+            f"  Format: {item['response_format']} | Tokens: {item['max_tokens_param']}"
+        )
+    if not profiles and LLM_API_KEY:
+        lines.append("\nEnvironment fallback: configured (key hidden)")
+    elif profiles:
+        lines.append("\nActive profile ကို /provider_use <name> ဖြင့် ပြောင်းနိုင်ပါတယ်။")
+    return "\n".join(lines)
+
+
+PROVIDER_NAME, PROVIDER_KEY, PROVIDER_ENDPOINT, PROVIDER_MODEL, PROVIDER_OPTIONS = range(5)
+
+
 def usage_text() -> str:
     return (
         "အသုံးပြုနိုင်သော command များ\n\n"
@@ -503,6 +565,11 @@ def usage_text() -> str:
         "/id — လက်ရှိ chat ID ကြည့်ရန်\n"
         "/forward <target_chat_id> — reply လုပ်ထားသော message ကို relevance စစ်ပြီး intro နှင့် forward လုပ်ရန်\n"
         "/targets — ခွင့်ပြုထားသော target channel/group များကြည့်ရန်\n"
+        "/provider_list — API provider profiles ကြည့်ရန် (admin)\n"
+        "/provider_add — API key, endpoint, model profile ထည့်ရန် (admin)\n"
+        "/provider_use <name> — active provider ရွေးရန် (admin)\n"
+        "/provider_test [name] — provider connection စမ်းရန် (admin)\n"
+        "/provider_remove <name> — profile ဖျက်ရန် (admin)\n"
         "/help — အကူအညီ\n\n"
         "Content ကို command နောက်တွင်ထည့်နိုင်သလို၊ message တစ်ခုကို reply လုပ်ပြီး command သုံးနိုင်ပါတယ်။"
     )
@@ -518,6 +585,187 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(usage_text())
+
+
+async def provider_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not is_admin(update):
+        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        return ConversationHandler.END
+    if not update.effective_chat or update.effective_chat.type != "private":
+        await update.message.reply_text("API key ထည့်ခြင်းကို လုံခြုံရေးအတွက် bot private chat ထဲမှာသာ လုပ်ပါ။")
+        return ConversationHandler.END
+    if provider_store_or_error() is None:
+        await update.message.reply_text(
+            "Provider pool မရနိုင်သေးပါ။ BOT_TOKEN မရှိခြင်း သို့မဟုတ် PROVIDER_STORE_KEY မမှန်ခြင်း ဖြစ်နိုင်ပါတယ်။"
+        )
+        return ConversationHandler.END
+    context.user_data["provider_draft"] = {}
+    await update.message.reply_text(
+        "Provider profile name ထည့်ပါ။ ဥပမာ `openai-main` သို့မဟုတ် `openrouter`\n\n"
+        "Cancel လုပ်ရန် /cancel ကိုသုံးပါ။"
+    )
+    return PROVIDER_NAME
+
+
+async def provider_add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    name = (update.message.text or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,39}", name):
+        await update.message.reply_text("Name သည် အင်္ဂလိပ်စာ/နံပါတ်/`_`/`-`/`.` ဖြင့် 1-40 characters ဖြစ်ရပါမယ်။")
+        return PROVIDER_NAME
+    context.user_data["provider_draft"]["name"] = name
+    await update.message.reply_text("API key ထည့်ပါ။ ဒီ message ကို သိမ်းပြီးနောက် ဖျက်ပေးပါမယ်။")
+    return PROVIDER_KEY
+
+
+async def provider_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    key = (update.message.text or "").strip()
+    if not key:
+        await update.message.reply_text("API key အလွတ်မဖြစ်ရပါ။")
+        return PROVIDER_KEY
+    context.user_data["provider_draft"]["api_key"] = key
+    try:
+        await update.message.delete()
+    except TelegramError:
+        context.user_data.pop("provider_draft", None)
+        await update.message.reply_text(
+            "လုံခြုံရေးအတွက် API key message ကို ဖျက်၍မရသဖြင့် setup ကို ရပ်လိုက်ပါတယ်။ "
+            "Bot ကို private chat တွင် admin အဖြစ်အသုံးပြုကြောင်း စစ်ပြီး ပြန်စပါ။"
+        )
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "Endpoint ထည့်ပါ။ ဥပမာ `https://api.openai.com/v1`\n"
+        "Provider default သုံးမည်ဆို `-` ဟုထည့်ပါ။"
+    )
+    return PROVIDER_ENDPOINT
+
+
+async def provider_add_endpoint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    endpoint = (update.message.text or "").strip()
+    context.user_data["provider_draft"]["base_url"] = "" if endpoint in {"", "-", "default"} else normalize_base_url(endpoint)
+    await update.message.reply_text("Model ID ထည့်ပါ။ ဥပမာ `gpt-5-mini`, `openai/gpt-5-mini`, `llama-3.1-8b-instruct`")
+    return PROVIDER_MODEL
+
+
+async def provider_add_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    model = (update.message.text or "").strip()
+    if not model:
+        await update.message.reply_text("Model ID အလွတ်မဖြစ်ရပါ။")
+        return PROVIDER_MODEL
+    context.user_data["provider_draft"]["model"] = model
+    await update.message.reply_text(
+        "Advanced options တစ်ကြောင်းထည့်ပါ:\n"
+        "`response_format | tokens_param | timeout_seconds | max_retries | reasoning`\n\n"
+        "ဥပမာ `auto | auto | 60 | 2 |`\n"
+        "မထည့်လိုပါက `auto | auto | 60 | 2 |` ကိုသုံးပါ။"
+    )
+    return PROVIDER_OPTIONS
+
+
+async def provider_add_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    parts = [part.strip() for part in (update.message.text or "").split("|")]
+    parts += [""] * (5 - len(parts))
+    try:
+        profile = ProviderProfile(
+            name=context.user_data["provider_draft"]["name"],
+            api_key=context.user_data["provider_draft"]["api_key"],
+            base_url=context.user_data["provider_draft"]["base_url"],
+            model=context.user_data["provider_draft"]["model"],
+            response_format=parts[0] or "auto",
+            max_tokens_param=parts[1] or "auto",
+            timeout_seconds=float(parts[2] or "60"),
+            max_retries=int(parts[3] or "2"),
+            reasoning_effort=parts[4].lower(),
+        )
+        profile.validate()
+        store = provider_store_or_error()
+        if store is None:
+            raise ProviderPoolError("Provider pool is not available")
+        store.upsert(profile)
+    except (KeyError, ValueError, ProviderPoolError) as exc:
+        await update.message.reply_text(f"Provider profile မသိမ်းနိုင်ပါ။ {exc}\nပြန်ထည့်ရန် အရင် step မှာ /cancel ပြီး /provider_add ပြန်စပါ။")
+        context.user_data.pop("provider_draft", None)
+        return ConversationHandler.END
+    context.user_data.pop("provider_draft", None)
+    await update.message.reply_text(
+        f"✅ Provider `{profile.name}` သိမ်းပြီးပါပြီ။\n"
+        "API key ကို list တွင် mask လုပ်ထားမည်ဖြစ်ပြီး၊ အသုံးပြုရန် /provider_use "
+        f"{profile.name} ကိုသုံးပါ။"
+    )
+    return ConversationHandler.END
+
+
+async def provider_add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.pop("provider_draft", None)
+    await update.message.reply_text("Provider setup ကို ပယ်ဖျက်ပြီးပါပြီ။")
+    return ConversationHandler.END
+
+
+async def provider_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_admin(update):
+        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        return
+    await update.message.reply_text(provider_list_text())
+
+
+async def provider_use_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_admin(update):
+        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        return
+    if not context.args:
+        await update.message.reply_text("အသုံးပြုပုံ: /provider_use <profile_name>")
+        return
+    store = provider_store_or_error()
+    if store is None:
+        await update.message.reply_text(provider_list_text())
+        return
+    try:
+        profile = store.activate(context.args[0].strip())
+    except ProviderPoolError as exc:
+        await update.message.reply_text(f"Provider မရွေးနိုင်ပါ။ {exc}")
+        return
+    await update.message.reply_text(f"✅ Active provider: `{profile.name}` | model: `{profile.model}`")
+
+
+async def provider_remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_admin(update):
+        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        return
+    if not context.args:
+        await update.message.reply_text("အသုံးပြုပုံ: /provider_remove <profile_name>")
+        return
+    store = provider_store_or_error()
+    if store is None:
+        await update.message.reply_text(provider_list_text())
+        return
+    try:
+        store.remove(context.args[0].strip())
+    except ProviderPoolError as exc:
+        await update.message.reply_text(f"Provider မဖျက်နိုင်ပါ။ {exc}")
+        return
+    await update.message.reply_text(f"✅ Provider `{context.args[0].strip()}` ဖျက်ပြီးပါပြီ။\n\n{provider_list_text()}")
+
+
+async def provider_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_admin(update):
+        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        return
+    store = provider_store_or_error()
+    try:
+        profile = store.get(context.args[0].strip()) if context.args and store else None
+        if context.args and profile is None:
+            raise ProviderPoolError(f"Provider '{context.args[0].strip()}' was not found")
+        selected_name = profile.name if profile else "environment fallback"
+        await update.message.reply_text(f"`{selected_name}` ကို စမ်းသပ်နေပါတယ်…")
+        result = await ContentAgent(provider=profile).agent(
+            "Reply with a short Burmese confirmation that this provider connection is working."
+        )
+        await update.message.reply_text(
+            f"✅ Provider connection အလုပ်လုပ်ပါတယ်။\n"
+            f"Profile: `{selected_name}`\n"
+            f"Response: {str(result.get('answer', 'OK'))[:500]}"
+        )
+    except (AgentError, ProviderPoolError) as exc:
+        await update.message.reply_text(f"❌ Provider connection မအောင်မြင်ပါ။ {exc}")
 
 
 async def run_agent_reply(update: Update, prompt: str) -> None:
@@ -728,6 +976,11 @@ async def post_init(application: Application) -> None:
             BotCommand("id", "လက်ရှိ chat ID"),
             BotCommand("forward", "Smart forwarding"),
             BotCommand("targets", "Target list"),
+            BotCommand("provider_list", "API provider list"),
+            BotCommand("provider_add", "Add API provider"),
+            BotCommand("provider_use", "Select API provider"),
+            BotCommand("provider_test", "Test API provider"),
+            BotCommand("provider_remove", "Remove API provider"),
             BotCommand("help", "အကူအညီ"),
         ]
     )
@@ -736,8 +989,10 @@ async def post_init(application: Application) -> None:
 def main() -> None:
     if not BOT_TOKEN:
         raise SystemExit("BOT_TOKEN is required")
-    if not LLM_API_KEY:
-        raise SystemExit("LLM_API_KEY or OPENAI_API_KEY is required")
+    if not LLM_API_KEY and PROVIDER_POOL is None and PROVIDER_POOL_ERROR:
+        raise SystemExit(PROVIDER_POOL_ERROR)
+    if not LLM_API_KEY and PROVIDER_POOL is None and not BOT_TOKEN:
+        raise SystemExit("BOT_TOKEN is required")
 
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     application.add_handler(CommandHandler("start", start))
@@ -749,10 +1004,30 @@ def main() -> None:
     application.add_handler(CommandHandler("scout", scout_command))
     application.add_handler(CommandHandler("id", id_command))
     application.add_handler(CommandHandler("targets", targets_command))
+    application.add_handler(CommandHandler("provider_list", provider_list_command))
+    application.add_handler(CommandHandler("provider_use", provider_use_command))
+    application.add_handler(CommandHandler("provider_test", provider_test_command))
+    application.add_handler(CommandHandler("provider_remove", provider_remove_command))
+    provider_add_handler = ConversationHandler(
+        entry_points=[CommandHandler("provider_add", provider_add_start)],
+        states={
+            PROVIDER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, provider_add_name)],
+            PROVIDER_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, provider_add_key)],
+            PROVIDER_ENDPOINT: [MessageHandler(filters.TEXT & ~filters.COMMAND, provider_add_endpoint)],
+            PROVIDER_MODEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, provider_add_model)],
+            PROVIDER_OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, provider_add_options)],
+        },
+        fallbacks=[CommandHandler("cancel", provider_add_cancel)],
+        per_user=True,
+        per_chat=True,
+        allow_reentry=True,
+    )
+    application.add_handler(provider_add_handler)
     application.add_handler(CommandHandler("forward", forward_command))
     application.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, freeform_agent_message))
     application.add_error_handler(error_handler)
-    logger.info("Starting Telegram Content Strategist bot with model %s", LLM_MODEL)
+    active_name = PROVIDER_POOL.active_name if PROVIDER_POOL is not None else "environment fallback"
+    logger.info("Starting Telegram Content Strategist bot with provider %s", active_name or "environment fallback")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

@@ -1,6 +1,10 @@
 import asyncio
 import os
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
+
+from cryptography.fernet import Fernet
 
 os.environ["TARGETS_JSON"] = '[{"chat_id": -1001, "label": "AI MM", "description": "AI", "allowed_categories": ["AI"]}]'
 os.environ["LLM_API_KEY"] = "test-key"
@@ -8,6 +12,7 @@ os.environ["LLM_API_KEY"] = "test-key"
 import bot
 from bot import TARGETS, ContentAgent, normalize_base_url, parse_groups, parse_member_count
 from groupscan import parse_groups as parse_group_records, render_report, split_niche_and_groups
+from provider_pool import ProviderPoolStore, ProviderProfile
 
 assert parse_member_count("12K") == 12000
 assert parse_member_count("1.5M") == 1500000
@@ -29,6 +34,27 @@ assert niche == "AI tools" and "AI Myanmar" in group_text
 assert "Target 1" in render_report({"groups": [{"name": "AI Myanmar", "fit_score": 90, "match": True, "spam_flag": False, "quality_label": "high", "reason": "Relevant", "evidence": ["AI"], "action": "target"}]})
 assert TARGETS[0]["chat_id"] == -1001
 assert normalize_base_url("https://provider.example/v1/chat/completions") == "https://provider.example/v1"
+
+with tempfile.TemporaryDirectory() as tmp:
+    pool_path = Path(tmp) / "provider_pool.enc"
+    store_key = Fernet.generate_key().decode()
+    store = ProviderPoolStore(pool_path, store_key)
+    profile = ProviderProfile(
+        name="test-provider",
+        api_key="secret-provider-key-1234",
+        base_url="https://provider.example/v1?api_key=do-not-show",
+        model="openai/gpt-5-mini",
+    )
+    store.upsert(profile)
+    assert store.active_name == "test-provider"
+    listing = store.list_profiles()[0]
+    assert listing["api_key"] != profile.api_key
+    assert "do-not-show" not in listing["base_url"]
+    reloaded = ProviderPoolStore(pool_path, store_key)
+    assert reloaded.get("test-provider").api_key == profile.api_key
+    reloaded.activate("test-provider")
+    reloaded.remove("test-provider")
+    assert reloaded.active_name == ""
 assert normalize_base_url("https://provider.example/v1/") == "https://provider.example/v1"
 
 
@@ -53,13 +79,13 @@ class FakeClient:
 bot.OpenAI = FakeClient
 agent = ContentAgent()
 assert agent._json_text("```json\n{\"ok\":true}\n```") == '{"ok":true}'
-os.environ["LLM_MAX_TOKENS_PARAM"] = "max_tokens"
+agent.max_tokens_param = "max_tokens"
 assert agent._token_parameter(100) == {"max_tokens": 100}
-previous_model = bot.LLM_MODEL
-bot.LLM_MODEL = "openai/gpt-5-mini"
-os.environ["LLM_MAX_TOKENS_PARAM"] = "auto"
+previous_model = agent.model
+agent.model = "openai/gpt-5-mini"
+agent.max_tokens_param = "auto"
 assert agent._token_parameter(100) == {"max_completion_tokens": 100}
-bot.LLM_MODEL = previous_model
+agent.model = previous_model
 result = asyncio.run(agent.create_post("AI tools are provided in the source."))
 assert result["needs_review"] is False
 assert result["category"] == "AI"

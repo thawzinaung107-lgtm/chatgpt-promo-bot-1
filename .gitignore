@@ -5,3 +5,5 @@ chatgpt_token.txt
 *.log
 temp_*.txt
 *.json
+provider_pool.enc
+provider_pool.*.enc

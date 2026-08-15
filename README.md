@@ -19,6 +19,7 @@ The model is instructed not to invent facts, news, statistics, engagement, or gr
 | Chat ID helper | `/id` | Shows the current chat ID so an administrator can configure the GroupScan chat allowlist. |
 | Smart forwarding | Reply to a source message, then `/forward <target_chat_id>` | Checks relevance first, sends the generated intro, and then forwards the original message only for approved targets. |
 | Target review | `/targets` | Shows the configured target allowlist to admins. |
+| Provider pool | `/provider_list`, `/provider_add`, `/provider_use`, `/provider_test`, `/provider_remove` | Lets admins add and select API key, endpoint, model, and compatibility settings from a private Telegram chat. |
 
 ## Configuration
 
@@ -41,6 +42,8 @@ Copy `.env.example` to `.env` for local development, or add the same values as e
 | `GROUPSCAN_ALLOWED_CHAT_IDS` | No | Comma-separated chat IDs where `/groupscan` is allowed. Leave blank to allow any chat. |
 | `GROUPSCAN_MAX_GROUPS` | No | Maximum groups accepted per scan; defaults to `50`. |
 | `GROUPSCAN_MAX_FILE_BYTES` | No | Maximum UTF-8 input-file size; defaults to `1000000` bytes. |
+| `PROVIDER_STORE_KEY` | No | Optional Fernet key for encrypting the provider pool. If blank, a key is derived from `BOT_TOKEN`. |
+| `PROVIDER_POOL_PATH` | No | Encrypted provider-pool file path; defaults to `provider_pool.enc`. |
 | `LOG_LEVEL` | No | Python logging level; defaults to `INFO`. |
 
 Example `TARGETS_JSON`:
@@ -81,6 +84,12 @@ LLM_MAX_TOKENS_PARAM=auto
 
 The bot first attempts strict JSON Schema output, then falls back to JSON mode and finally plain JSON parsing when the provider does not support the stronger format. The model, API key, and base URL are never sent to Telegram users.
 
+### In-bot provider pool
+
+Add the Telegram user ID to `ADMIN_IDS`, start the bot, and open a private chat with it. Use `/provider_add` and complete the guided flow for profile name, API key, endpoint, model, and advanced compatibility options. The bot attempts to delete the plaintext API-key message immediately; if deletion fails, it aborts the setup rather than saving the key.
+
+Use `/provider_list` to see masked keys and redacted endpoints, `/provider_use <name>` to select the active profile, `/provider_test [name]` to verify a profile, and `/provider_remove <name>` to delete one. Provider profiles are encrypted at rest in `provider_pool.enc`; the file must be stored on persistent storage in production, and `PROVIDER_STORE_KEY` must be preserved if you set it explicitly. The active profile is used automatically by `/agent`, `/post`, `/curate`, `/groupscan`, and `/forward`.
+
 Example GroupScan input:
 
 ```text
@@ -102,7 +111,7 @@ The bot treats member count as supplied context only. It does not claim that a g
 
 ## Deployment
 
-The included `render.yaml` starts the polling process from `bot.py`. Add the environment variables from the configuration table to the service settings, then deploy the repository. For production use, choose hosting that keeps a Telegram polling process continuously available, and grant the bot only the channel/group permissions it needs.
+The included `render.yaml` starts the polling process from `bot.py`. Add the environment variables from the configuration table to the service settings, then deploy the repository. If provider profiles are managed in Telegram, attach persistent storage for `PROVIDER_POOL_PATH`; otherwise profiles may be lost when the host replaces the instance. For production use, choose hosting that keeps a Telegram polling process continuously available, and grant the bot only the channel/group permissions it needs.
 
 ## Implementation notes
 
