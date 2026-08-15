@@ -14,7 +14,8 @@ The model is instructed not to invent facts, news, statistics, engagement, or gr
 |---|---|---|
 | Content creation | `/post <source>` | Converts source material into a Burmese Telegram post with hook, short sections, restrained emojis, and CTA. |
 | Content curation | `/curate <content>` | Classifies the content and drafts a 1–2 sentence context intro without sending anything. |
-| Group scouting | `/scout <niche>` followed by one group per line | Scores niche fit, flags spam or irrelevance, and returns `target`, `review`, or `exclude`. |
+| GroupScan scouting | `/groupscan <niche>` or `/scout <niche>` | Scores niche fit, flags spam or irrelevance, and returns `target`, `review`, or `exclude`. Accepts pipe-delimited text, CSV, JSON, or a replied UTF-8 text file. |
+| Chat ID helper | `/id` | Shows the current chat ID so an administrator can configure the GroupScan chat allowlist. |
 | Smart forwarding | Reply to a source message, then `/forward <target_chat_id>` | Checks relevance first, sends the generated intro, and then forwards the original message only for approved targets. |
 | Target review | `/targets` | Shows the configured target allowlist to admins. |
 
@@ -31,6 +32,9 @@ Copy `.env.example` to `.env` for local development, or add the same values as e
 | `ADMIN_IDS` | Recommended | Comma-separated Telegram numeric user IDs allowed to use `/forward` and `/targets`. |
 | `TARGETS_JSON` | Required for forwarding | JSON object or array containing `chat_id`, `label`, `description`, and optional `allowed_categories`. |
 | `MAX_INPUT_CHARS` | No | Maximum prompt size; defaults to `8000`. |
+| `GROUPSCAN_ALLOWED_CHAT_IDS` | No | Comma-separated chat IDs where `/groupscan` is allowed. Leave blank to allow any chat. |
+| `GROUPSCAN_MAX_GROUPS` | No | Maximum groups accepted per scan; defaults to `50`. |
+| `GROUPSCAN_MAX_FILE_BYTES` | No | Maximum UTF-8 input-file size; defaults to `1000000` bytes. |
 | `LOG_LEVEL` | No | Python logging level; defaults to `INFO`. |
 
 Example `TARGETS_JSON`:
@@ -59,14 +63,22 @@ cp .env.example .env
 python bot.py
 ```
 
-Example group input:
+Example GroupScan input:
 
 ```text
-/scout AI tools
+/groupscan AI tools
 AI Myanmar | မြန်မာဘာသာ AI tool များဆွေးနွေးခြင်း | 12K
 Marketing MM | Digital marketing နှင့် ads | 850
 Crypto Deals | token giveaways and instant profit | 45K
 ```
+
+The same command accepts JSON:
+
+```json
+{"groups":[{"name":"AI Myanmar","description":"AI tools","member_count":"12K"}]}
+```
+
+For a file workflow, upload a UTF-8 `.txt`, `.csv`, or `.json` file, reply to it with `/groupscan AI tools`, and the bot will parse the metadata. Use `/id` in a group to see its chat ID, then set `GROUPSCAN_ALLOWED_CHAT_IDS` if scanning should be limited to specific chats.
 
 The bot treats member count as supplied context only. It does not claim that a group is active or high quality merely because it has more members.
 
@@ -76,7 +88,7 @@ The included `render.yaml` starts the polling process from `bot.py`. Add the env
 
 ## Implementation notes
 
-The bot uses structured JSON responses for post creation, curation, and group scouting. This keeps the forwarding decision separate from the user-facing text and makes it possible to reject malformed or incomplete model responses. Model calls run in a worker thread so the asynchronous Telegram update loop remains responsive.
+The bot uses structured JSON responses for post creation, curation, and GroupScan. Every GroupScan result must contain exactly one matching result per supplied group; malformed or incomplete results are rejected. The integration intentionally does not execute the attached network-reconnaissance code, perform host/port scans, enumerate subdomains, probe SNI/VPN handshakes, or search for CDN origin IPs. Model calls run in a worker thread so the asynchronous Telegram update loop remains responsive.
 
 ## References
 

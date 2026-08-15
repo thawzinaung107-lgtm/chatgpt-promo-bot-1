@@ -18,6 +18,15 @@ from telegram import BotCommand, Update
 from telegram.error import TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+from groupscan import (
+    GroupScanInputError,
+    MAX_FILE_BYTES as GROUPSCAN_MAX_FILE_BYTES,
+    parse_groups as parse_group_records,
+    parse_member_count,
+    render_report,
+    split_niche_and_groups,
+)
+
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -179,6 +188,7 @@ LLM_API_KEY = (os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")).stri
 LLM_BASE_URL = (os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_API_BASE", "")).strip()
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini").strip()
 ADMIN_IDS = _csv_ints(os.getenv("ADMIN_IDS"))
+GROUPSCAN_ALLOWED_CHAT_IDS = _csv_ints(os.getenv("GROUPSCAN_ALLOWED_CHAT_IDS"))
 TARGETS = _load_targets(os.getenv("TARGETS_JSON"))
 MAX_INPUT_CHARS = max(1000, int(os.getenv("MAX_INPUT_CHARS", "8000")))
 
@@ -275,7 +285,7 @@ CONTENT TO CURATE:
 
     async def scout(self, groups: list[dict[str, Any]], niche: str) -> dict[str, Any]:
         serialized = json.dumps(groups, ensure_ascii=False)
-        return await self._structured(
+        result = await self._structured(
             schema_name="telegram_group_scout",
             schema=SCOUT_SCHEMA,
             max_tokens=3500,
@@ -293,66 +303,23 @@ GROUPS:
 {serialized}
 """,
         )
+        expected = {group["name"].casefold() for group in groups}
+        actual = {str(item.get("name", "")).casefold() for item in result.get("groups", [])}
+        if actual != expected:
+            raise AgentError("GroupScan result did not contain one matching result per supplied group")
+        return result
 
 
-def parse_member_count(raw: Any) -> int | None:
-    if isinstance(raw, (int, float)):
-        return int(raw)
-    if raw is None:
-        return None
-    text = str(raw).strip().lower().replace(",", "")
-    match = re.search(r"(\d+(?:\.\d+)?)\s*([km]?)", text)
-    if not match:
-        return None
-    value = float(match.group(1))
-    suffix = match.group(2)
-    if suffix == "k":
-        value *= 1000
-    elif suffix == "m":
-        value *= 1_000_000
-    return int(value)
+# Re-export the safe parser name for compatibility with earlier imports.
+parse_groups = parse_group_records
 
 
-def parse_groups(raw: str) -> list[dict[str, Any]]:
-    raw = raw.strip()
-    if not raw:
-        return []
-
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict):
-            parsed = parsed.get("groups", [])
-        if isinstance(parsed, list):
-            groups = []
-            for item in parsed:
-                if isinstance(item, dict) and item.get("name"):
-                    groups.append(
-                        {
-                            "name": str(item["name"]).strip(),
-                            "description": str(item.get("description", "")).strip(),
-                            "member_count": parse_member_count(item.get("member_count")),
-                        }
-                    )
-            if groups:
-                return groups[:30]
-    except json.JSONDecodeError:
-        pass
-
-    groups = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = [part.strip() for part in re.split(r"\s*\|\s*|\t+", line)]
-        if len(parts) < 2:
-            continue
-        name = parts[0]
-        member_count = parse_member_count(parts[-1]) if len(parts) >= 3 else None
-        description = " | ".join(parts[1:-1]) if len(parts) >= 3 else parts[1]
-        groups.append(
-            {"name": name, "description": description, "member_count": member_count}
-        )
-    return groups[:30]
+def group_scan_allowed(update: Update) -> bool:
+    """Optionally restrict GroupScan commands to explicitly configured chats."""
+    if not GROUPSCAN_ALLOWED_CHAT_IDS:
+        return True
+    chat = update.effective_chat
+    return bool(chat and chat.id in GROUPSCAN_ALLOWED_CHAT_IDS)
 
 
 def source_from_message(message: Any) -> str:
@@ -369,6 +336,33 @@ def command_payload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     if update.message and update.message.reply_to_message:
         return source_from_message(update.message.reply_to_message)
     return ""
+
+
+def full_command_payload(update: Update) -> str:
+    """Preserve newlines after a command; context.args intentionally tokenizes them."""
+    text = (update.message.text if update.message else "") or ""
+    return text.partition(" ")[2].strip()
+
+
+async def group_scan_payload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    reply = update.message.reply_to_message if update.message else None
+    if reply and reply.document:
+        file_size = reply.document.file_size or 0
+        if file_size > GROUPSCAN_MAX_FILE_BYTES:
+            raise GroupScanInputError("Attached group list is larger than the configured input limit")
+        telegram_file = await context.bot.get_file(reply.document.file_id)
+        data = await telegram_file.download_as_bytearray()
+        try:
+            document_text = bytes(data).decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise GroupScanInputError("Attached group list must be UTF-8 text") from exc
+        niche = " ".join(context.args).strip()
+        return f"{niche}\n{document_text}".strip() if niche else document_text.strip()
+    payload = full_command_payload(update)
+    reply_text = source_from_message(reply) if reply else ""
+    if reply_text:
+        return f"{payload}\n{reply_text}".strip() if payload else reply_text
+    return payload
 
 
 def chunk_text(text: str, size: int = 3900) -> list[str]:
@@ -389,7 +383,9 @@ def usage_text() -> str:
         "အသုံးပြုနိုင်သော command များ\n\n"
         "/post <အချက်အလက်> — source ကို Burmese Telegram post အဖြစ်ရေးရန်\n"
         "/curate <content> — target မသတ်မှတ်ဘဲ context intro နှင့် category အကြံပြုရန်\n"
-        "/scout <niche>\nအုပ်စုအမည် | description | members — group များစစ်ရန်\n"
+        "/groupscan <niche>\nအုပ်စုအမည် | description | members — group များစစ်ရန်\n"
+        "/scout — /groupscan ၏ backward-compatible alias\n"
+        "/id — လက်ရှိ chat ID ကြည့်ရန်\n"
         "/forward <target_chat_id> — reply လုပ်ထားသော message ကို relevance စစ်ပြီး intro နှင့် forward လုပ်ရန်\n"
         "/targets — ခွင့်ပြုထားသော target channel/group များကြည့်ရန်\n"
         "/help — အကူအညီ\n\n"
@@ -446,47 +442,64 @@ async def curate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(f"မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
 
 
-async def scout_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    raw = " ".join(context.args).strip()
-    if update.message.reply_to_message:
-        raw = source_from_message(update.message.reply_to_message)
+async def groupscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not group_scan_allowed(update):
+        await update.message.reply_text("ဒီ chat ကို GroupScan အသုံးပြုခွင့် allowlist ထဲတွင် မထည့်ရသေးပါ။")
+        return
+    try:
+        raw = await group_scan_payload(update, context)
+    except GroupScanInputError as exc:
+        await update.message.reply_text(f"GroupScan input မမှန်ပါ။ {exc}")
+        return
     if not raw:
         await update.message.reply_text(
-            "ဥပမာ:\n/scout AI tools\nAI Myanmar | AI tool များဆွေးနွေးခြင်း | 12K\nMarketing MM | Digital marketing | 850"
+            "အသုံးပြုပုံ:\n"
+            "/groupscan AI tools\n"
+            "AI Myanmar | AI tool များဆွေးနွေးခြင်း | 12K\n"
+            "Marketing MM | Digital marketing | 850\n\n"
+            "သို့မဟုတ် group list `.txt`, `.csv`, `.json` ကို upload လုပ်ပြီး reply ဖြင့် /groupscan <niche> ကိုသုံးပါ။"
         )
         return
 
-    niche = ""
-    lines = raw.splitlines()
-    if lines and "|" not in lines[0] and "\t" not in lines[0] and not lines[0].lstrip().startswith("{"):
-        niche, raw = lines[0], "\n".join(lines[1:])
-    groups = parse_groups(raw)
+    niche, group_text = split_niche_and_groups(raw)
+    try:
+        groups = parse_group_records(group_text)
+    except GroupScanInputError as exc:
+        await update.message.reply_text(f"GroupScan input မမှန်ပါ။ {exc}")
+        return
     if not groups:
-        await update.message.reply_text("Group format မမှန်ပါ။ `အမည် | description | member count` တစ်ကြောင်းစီသုံးပါ။")
+        await update.message.reply_text(
+            "Group record မတွေ့ပါ။ `အမည် | description | member count`၊ CSV header သို့မဟုတ် JSON groups format ကိုသုံးပါ။"
+        )
         return
 
-    await update.message.reply_text(f"{len(groups)} ခုကို target niche နဲ့ တိုက်စစ်နေပါတယ်…")
+    status_msg = await update.message.reply_text(
+        f"{len(groups)} ခုကို `{niche or 'သတ်မှတ်မထားသော niche'}` အတွက် စစ်နေပါတယ်…"
+    )
     try:
         result = await ContentAgent().scout(groups, niche)
-        rows = ["🔎 Group Scouting Report", ""]
-        for item in result.get("groups", []):
-            score = max(0, min(100, float(item.get("fit_score", 0))))
-            flags = []
-            if item.get("spam_flag"):
-                flags.append("SPAM FLAG")
-            if not item.get("match"):
-                flags.append("IRRELEVANT")
-            label = item.get("quality_label", "unknown").upper()
-            action = item.get("action", "review").upper()
-            rows.append(f"• {item.get('name', 'Unknown')} — {score:.0f}/100 | {label} | {action} {' | '.join(flags)}")
-            rows.append(f"  {item.get('reason', '')}")
-            evidence = item.get("evidence", [])
-            if evidence:
-                rows.append("  Evidence: " + "; ".join(str(x) for x in evidence[:3]))
-        for part in chunk_text("\n".join(rows)):
+        report = render_report(result)
+        await status_msg.delete()
+        for part in chunk_text(report):
             await update.message.reply_text(part)
     except AgentError as exc:
-        await update.message.reply_text(f"မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
+        await status_msg.edit_text(f"မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
+    except TelegramError:
+        logger.exception("Could not update GroupScan status message")
+
+
+# Backward-compatible command name.
+scout_command = groupscan_command
+
+
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if not chat:
+        return
+    await update.message.reply_text(
+        f"📌 Chat ID: `{chat.id}`\n\n"
+        "ဒီ ID ကို `GROUPSCAN_ALLOWED_CHAT_IDS` ထဲထည့်ပြီး GroupScan ကို သတ်မှတ်ထားတဲ့ chat များတွင်သာ ခွင့်ပြုနိုင်ပါတယ်။"
+    )
 
 
 async def targets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -562,7 +575,9 @@ async def post_init(application: Application) -> None:
             BotCommand("start", "စတင်ရန်"),
             BotCommand("post", "Telegram post ရေးရန်"),
             BotCommand("curate", "Content curation"),
-            BotCommand("scout", "Group scouting"),
+            BotCommand("groupscan", "GroupScan scouting"),
+            BotCommand("scout", "GroupScan alias"),
+            BotCommand("id", "လက်ရှိ chat ID"),
             BotCommand("forward", "Smart forwarding"),
             BotCommand("targets", "Target list"),
             BotCommand("help", "အကူအညီ"),
@@ -581,7 +596,9 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("post", post_command))
     application.add_handler(CommandHandler("curate", curate_command))
+    application.add_handler(CommandHandler("groupscan", groupscan_command))
     application.add_handler(CommandHandler("scout", scout_command))
+    application.add_handler(CommandHandler("id", id_command))
     application.add_handler(CommandHandler("targets", targets_command))
     application.add_handler(CommandHandler("forward", forward_command))
     application.add_error_handler(error_handler)
