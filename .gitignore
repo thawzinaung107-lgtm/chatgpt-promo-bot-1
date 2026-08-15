@@ -7,3 +7,6 @@ temp_*.txt
 *.json
 provider_pool.enc
 provider_pool.*.enc
+*.db
+*.sqlite
+*.sqlite3

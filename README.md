@@ -28,7 +28,7 @@ Copy `.env.example` to `.env` for local development, or add the same values as e
 | Variable | Required | Description |
 |---|---:|---|
 | `BOT_TOKEN` | Yes | Token created through [@BotFather](https://t.me/BotFather). |
-| `LLM_API_KEY` | Yes | API key for the configured OpenAI-compatible language-model endpoint. Local aliases `OPENAI_API_KEY` is also accepted. |
+| `LLM_API_KEY` | No | Optional direct API fallback. You can leave it blank and add providers from Telegram. Local alias `OPENAI_API_KEY` is also accepted. |
 | `LLM_BASE_URL` | No | Compatible API root, usually ending in `/v1`; full `/chat/completions` URLs are normalized. Local alias `OPENAI_API_BASE` is also accepted. |
 | `LLM_MODEL` | No | Provider model ID. Local alias `OPENAI_MODEL` is also accepted. |
 | `LLM_RESPONSE_FORMAT` | No | `auto`, `json_schema`, `json_object`, or `none`; defaults to `auto` and falls back for providers without strict schema support. |
@@ -36,14 +36,15 @@ Copy `.env.example` to `.env` for local development, or add the same values as e
 | `LLM_TIMEOUT_SECONDS` | No | Request timeout; defaults to `60`. |
 | `LLM_MAX_RETRIES` | No | SDK retry count; defaults to `2`. |
 | `LLM_REASONING_EFFORT` | No | Optional GPT-5 reasoning effort: `minimal`, `low`, `medium`, or `high`. |
-| `ADMIN_IDS` | Recommended | Comma-separated Telegram numeric user IDs allowed to use `/forward` and `/targets`. |
+| `ADMIN_IDS` | Recommended | Comma-separated Telegram numeric user IDs allowed to use admin commands, including provider management. |
 | `TARGETS_JSON` | Required for forwarding | JSON object or array containing `chat_id`, `label`, `description`, and optional `allowed_categories`. |
 | `MAX_INPUT_CHARS` | No | Maximum prompt size; defaults to `8000`. |
 | `GROUPSCAN_ALLOWED_CHAT_IDS` | No | Comma-separated chat IDs where `/groupscan` is allowed. Leave blank to allow any chat. |
 | `GROUPSCAN_MAX_GROUPS` | No | Maximum groups accepted per scan; defaults to `50`. |
 | `GROUPSCAN_MAX_FILE_BYTES` | No | Maximum UTF-8 input-file size; defaults to `1000000` bytes. |
-| `PROVIDER_STORE_KEY` | No | Optional Fernet key for encrypting the provider pool. If blank, a key is derived from `BOT_TOKEN`. |
-| `PROVIDER_POOL_PATH` | No | Encrypted provider-pool file path; defaults to `provider_pool.enc`. |
+| `DATABASE_URL` | No | Database URL; defaults to `sqlite:///bot.db`. Use a PostgreSQL URL in production when desired. |
+| `API_KEY_ENCRYPTION_KEY` | No | Fernet key used to encrypt API keys in the database. If blank, a stable key is derived from `BOT_TOKEN`; preserve it after deployment. |
+| `PROVIDER_STORE_KEY` | No | Legacy alias accepted for `API_KEY_ENCRYPTION_KEY`. |
 | `LOG_LEVEL` | No | Python logging level; defaults to `INFO`. |
 
 Example `TARGETS_JSON`:
@@ -84,11 +85,26 @@ LLM_MAX_TOKENS_PARAM=auto
 
 The bot first attempts strict JSON Schema output, then falls back to JSON mode and finally plain JSON parsing when the provider does not support the stronger format. The model, API key, and base URL are never sent to Telegram users.
 
-### In-bot provider pool
+### Database-backed provider profiles and preferences
 
-Add the Telegram user ID to `ADMIN_IDS`, start the bot, and open a private chat with it. Use `/provider_add` and complete the guided flow for profile name, API key, endpoint, model, and advanced compatibility options. The bot attempts to delete the plaintext API-key message immediately; if deletion fails, it aborts the setup rather than saving the key.
+The bot stores provider profiles and user preferences in the database configured by `DATABASE_URL`. SQLite is the default for local use; PostgreSQL is supported for production deployments. API keys are encrypted with Fernet before they are written to the database. Set `API_KEY_ENCRYPTION_KEY` explicitly in production and preserve it permanently; if it is blank, the bot derives a stable key from `BOT_TOKEN`.
 
-Use `/provider_list` to see masked keys and redacted endpoints, `/provider_use <name>` to select the active profile, `/provider_test [name]` to verify a profile, and `/provider_remove <name>` to delete one. Provider profiles are encrypted at rest in `provider_pool.enc`; the file must be stored on persistent storage in production, and `PROVIDER_STORE_KEY` must be preserved if you set it explicitly. The active profile is used automatically by `/agent`, `/post`, `/curate`, `/groupscan`, and `/forward`.
+Add the administrator’s Telegram user ID to `ADMIN_IDS`, start the bot, and open a private chat with it. Use `/provider_add` and complete the guided flow for the profile name, API key, endpoint, model, and advanced compatibility options. The bot attempts to delete the plaintext API-key message immediately; if deletion fails, it aborts the setup rather than saving the key.
+
+Use `/provider_list` to see masked keys and redacted endpoints, `/provider_use <name>` to select the active profile, `/provider_test [name]` to verify a profile, and `/provider_remove <name>` to delete one. Profiles are isolated by Telegram user ID, so one user cannot activate or remove another user’s profile. The selected profile is used automatically by `/agent`, `/post`, `/curate`, `/groupscan`, and `/forward`.
+
+Use `/preferences` to view saved preferences and `/prefs_set <key> <value>` to save them. Supported keys are `language`, `default_niche`, and `style`. The current English build accepts `language=English`; `default_niche` is used when `/groupscan` is called without an explicit niche.
+
+If you are upgrading from the older encrypted `provider_pool.enc` format, stop the bot and run the one-time migration utility. Use the Telegram user ID that owned the old global provider pool:
+
+```bash
+python migrate_provider_pool.py \
+  --legacy provider_pool.enc \
+  --database sqlite:///bot.db \
+  --user-id 123456789
+```
+
+The migration imports profiles without printing API keys. After verifying the database-backed profiles with `/provider_list`, keep the database and encryption key backed up securely.
 
 Example GroupScan input:
 
@@ -111,11 +127,11 @@ The bot treats member count as supplied context only. It does not claim that a g
 
 ## Deployment
 
-The included `render.yaml` starts the polling process from `bot.py`. Add the environment variables from the configuration table to the service settings, then deploy the repository. If provider profiles are managed in Telegram, attach persistent storage for `PROVIDER_POOL_PATH`; otherwise profiles may be lost when the host replaces the instance. For production use, choose hosting that keeps a Telegram polling process continuously available, and grant the bot only the channel/group permissions it needs.
+The included `render.yaml` starts the polling process from `bot.py`. Add the environment variables from the configuration table to the service settings, then deploy the repository. For local deployments, `DATABASE_URL=sqlite:///bot.db` creates a persistent SQLite database. For production, use PostgreSQL or attach persistent storage for the SQLite file, preserve `API_KEY_ENCRYPTION_KEY`, and back up the database securely. For production use, choose hosting that keeps a Telegram polling process continuously available, and grant the bot only the channel/group permissions it needs.
 
 ## Implementation notes
 
-The bot uses structured JSON responses for the general agent, post creation, curation, and GroupScan. Every GroupScan result must contain exactly one matching result per supplied group; malformed or incomplete results are rejected. The integration intentionally does not execute the attached network-reconnaissance code, perform host/port scans, enumerate subdomains, probe SNI/VPN handshakes, or search for CDN origin IPs. Model calls run in a worker thread so the asynchronous Telegram update loop remains responsive.
+The bot uses structured JSON responses for the general agent, post creation, curation, and GroupScan. Every GroupScan result must contain exactly one matching result per supplied group; malformed or incomplete results are rejected. The integration intentionally does not execute the attached network-reconnaissance code, perform host/port scans, enumerate subdomains, probe SNI/VPN handshakes, or search for CDN origin IPs. Model calls run in a worker thread so the asynchronous Telegram update loop remains responsive. Database schema creation is idempotent and runs at startup.
 
 ## References
 

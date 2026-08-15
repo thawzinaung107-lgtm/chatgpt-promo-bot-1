@@ -1,8 +1,9 @@
-"""Encrypted provider profile storage for the Telegram bot.
+"""Database-backed provider profiles and user preferences.
 
-API keys are encrypted at rest with a Fernet key supplied through
-PROVIDER_STORE_KEY. The encryption key is never stored in this repository or in
-the encrypted profile file.
+Provider API keys are encrypted with Fernet before being written to SQLite or
+PostgreSQL. The encryption key is supplied through API_KEY_ENCRYPTION_KEY or the
+legacy PROVIDER_STORE_KEY variable; when neither is set, a stable key is derived
+from BOT_TOKEN so the bot can be configured from Telegram without another secret.
 """
 
 from __future__ import annotations
@@ -12,23 +13,27 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint, create_engine, select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$")
 ALLOWED_RESPONSE_FORMATS = {"auto", "json_schema", "json_object", "none"}
 ALLOWED_TOKEN_PARAMS = {"auto", "max_tokens", "max_completion_tokens"}
 ALLOWED_REASONING = {"", "minimal", "low", "medium", "high"}
+ALLOWED_PREFERENCE_KEYS = {"language", "default_niche", "style"}
 
 
 class ProviderPoolError(RuntimeError):
-    """Raised when the encrypted provider pool cannot be read or written safely."""
+    """Raised when provider storage or a provider profile cannot be used safely."""
 
 
 @dataclass
@@ -78,70 +83,99 @@ class ProviderProfile:
             raise ProviderPoolError("Retries must be between 0 and 10")
 
 
+class Base(DeclarativeBase):
+    pass
+
+
+class ProviderRecord(Base):
+    __tablename__ = "provider_profiles"
+    __table_args__ = (UniqueConstraint("owner_user_id", "name", name="uq_provider_owner_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    response_format: Mapped[str] = mapped_column(String(32), nullable=False, default="auto")
+    max_tokens_param: Mapped[str] = mapped_column(String(32), nullable=False, default="auto")
+    timeout_seconds: Mapped[float] = mapped_column(nullable=False, default=60.0)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    reasoning_effort: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserPreferenceRecord(Base):
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    language: Mapped[str] = mapped_column(String(32), nullable=False, default="English")
+    default_niche: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    style: Mapped[str] = mapped_column(String(100), nullable=False, default="professional")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ProviderPoolStore:
-    def __init__(self, path: str | Path, encryption_key: str) -> None:
+    """Persistent provider profiles and user preferences for SQLite or PostgreSQL."""
+
+    def __init__(self, database_url: str, encryption_key: str) -> None:
+        if not database_url:
+            raise ProviderPoolError("DATABASE_URL cannot be empty")
         if not encryption_key:
-            raise ProviderPoolError("PROVIDER_STORE_KEY is required for provider-pool storage")
+            raise ProviderPoolError("API_KEY_ENCRYPTION_KEY is required for database storage")
         try:
             self.fernet = Fernet(encryption_key.encode())
         except Exception as exc:
             raise ProviderPoolError(
-                "PROVIDER_STORE_KEY must be a valid Fernet key; generate one with Fernet.generate_key()."
+                "API_KEY_ENCRYPTION_KEY must be a valid Fernet key; generate one with Fernet.generate_key()."
             ) from exc
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._state: dict[str, Any] = {"active": "", "providers": {}}
-        self._load()
+
+        normalized_url = self._normalize_database_url(database_url)
+        engine_kwargs: dict[str, Any] = {"future": True, "pool_pre_ping": True}
+        if normalized_url.startswith("sqlite"):
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        try:
+            self.engine = create_engine(normalized_url, **engine_kwargs)
+            Base.metadata.create_all(self.engine)
+            self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
+        except SQLAlchemyError as exc:
+            raise ProviderPoolError(f"Database initialization failed: {exc}") from exc
+
+    @staticmethod
+    def _normalize_database_url(value: str | Path) -> str:
+        url = str(value).strip()
+        if url.startswith("postgres://"):
+            return "postgresql+psycopg://" + url[len("postgres://") :]
+        if url.startswith("postgresql://") and "+psycopg" not in url.split("://", 1)[0]:
+            return "postgresql+psycopg://" + url[len("postgresql://") :]
+        if url == "sqlite://" or url == "sqlite:///:memory:":
+            return "sqlite:///:memory:"
+        if url.startswith("sqlite://"):
+            return url
+        if "://" not in url:
+            return f"sqlite:///{Path(url).expanduser()}"
+        return url
+
+    @classmethod
+    def _encryption_key_from_environment(cls) -> str:
+        key = (os.getenv("API_KEY_ENCRYPTION_KEY") or os.getenv("PROVIDER_STORE_KEY") or "").strip()
+        if key:
+            return key
+        bot_token = os.getenv("BOT_TOKEN", "").strip()
+        if not bot_token:
+            return ""
+        digest = hashlib.sha256(("telegram-provider-database:" + bot_token).encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(digest).decode("ascii")
 
     @classmethod
     def from_environment(cls) -> "ProviderPoolStore | None":
-        key = os.getenv("PROVIDER_STORE_KEY", "").strip()
+        key = cls._encryption_key_from_environment()
         if not key:
-            # The bot token is already required and secret. Derive a stable Fernet
-            # key so admins can manage providers in Telegram without another secret.
-            bot_token = os.getenv("BOT_TOKEN", "").strip()
-            if not bot_token:
-                return None
-            digest = hashlib.sha256(
-                ("telegram-provider-pool:" + bot_token).encode("utf-8")
-            ).digest()
-            key = base64.urlsafe_b64encode(digest).decode("ascii")
-        path = os.getenv("PROVIDER_POOL_PATH", "provider_pool.enc")
-        return cls(path, key)
-
-    def _load(self) -> None:
-        if not self.path.exists():
-            return
-        try:
-            encrypted = self.path.read_bytes()
-            raw = json.loads(self.fernet.decrypt(encrypted).decode("utf-8"))
-        except (OSError, InvalidToken, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ProviderPoolError(
-                "Provider pool could not be decrypted. Check PROVIDER_STORE_KEY and file integrity."
-            ) from exc
-        if not isinstance(raw, dict) or not isinstance(raw.get("providers", {}), dict):
-            raise ProviderPoolError("Provider pool has an invalid structure")
-        self._state = {"active": str(raw.get("active", "")), "providers": raw["providers"]}
-
-    def _save(self) -> None:
-        payload = json.dumps(self._state, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        encrypted = self.fernet.encrypt(payload)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=".provider_pool.", dir=str(self.path.parent))
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(encrypted)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_name, self.path)
-            os.chmod(self.path, 0o600)
-        except Exception:
-            try:
-                os.unlink(temp_name)
-            except OSError:
-                pass
-            raise
+            return None
+        database_url = os.getenv("DATABASE_URL", "sqlite:///bot.db").strip()
+        return cls(database_url, key)
 
     @staticmethod
     def mask_key(value: str) -> str:
@@ -154,61 +188,161 @@ class ProviderPoolStore:
         try:
             parsed = urlsplit(value)
             sensitive = {"key", "api_key", "apikey", "token", "access_token", "secret", "authorization"}
-            query = [(key, "[redacted]" if key.lower() in sensitive else val) for key, val in parse_qsl(parsed.query, keep_blank_values=True)]
+            query = [
+                (key, "[redacted]" if key.lower() in sensitive else val)
+                for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
             return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
         except Exception:
             return "[redacted endpoint]"
 
-    def list_profiles(self) -> list[dict[str, Any]]:
-        active = self.active_name
-        result = []
-        for name, raw in sorted(self._state["providers"].items()):
-            profile = ProviderProfile.from_dict({"name": name, **raw})
-            result.append(
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _encrypt(self, value: str) -> str:
+        return self.fernet.encrypt(value.encode("utf-8")).decode("ascii")
+
+    def _decrypt(self, value: str) -> str:
+        try:
+            return self.fernet.decrypt(value.encode("ascii")).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError, ValueError) as exc:
+            raise ProviderPoolError("A stored API key could not be decrypted") from exc
+
+    def _to_profile(self, record: ProviderRecord) -> ProviderProfile:
+        return ProviderProfile(
+            name=record.name,
+            api_key=self._decrypt(record.api_key_encrypted),
+            base_url=record.base_url,
+            model=record.model,
+            response_format=record.response_format,
+            max_tokens_param=record.max_tokens_param,
+            timeout_seconds=record.timeout_seconds,
+            max_retries=record.max_retries,
+            reasoning_effort=record.reasoning_effort,
+        )
+
+    def list_profiles(self, user_id: int) -> list[dict[str, Any]]:
+        with self.Session() as session:
+            records = session.scalars(
+                select(ProviderRecord).where(ProviderRecord.owner_user_id == int(user_id)).order_by(ProviderRecord.name)
+            ).all()
+            return [
                 {
-                    "name": profile.name,
-                    "active": profile.name == active,
-                    "api_key": self.mask_key(profile.api_key),
-                    "base_url": self.redact_url(profile.base_url) or "provider default",
-                    "model": profile.model,
-                    "response_format": profile.response_format,
-                    "max_tokens_param": profile.max_tokens_param,
+                    "name": record.name,
+                    "active": record.is_active,
+                    "api_key": self.mask_key(self._decrypt(record.api_key_encrypted)),
+                    "base_url": self.redact_url(record.base_url) or "provider default",
+                    "model": record.model,
+                    "response_format": record.response_format,
+                    "max_tokens_param": record.max_tokens_param,
                 }
-            )
-        return result
+                for record in records
+            ]
 
-    @property
-    def active_name(self) -> str:
-        active = str(self._state.get("active", ""))
-        return active if active in self._state["providers"] else ""
+    def get(self, user_id: int, name: str | None = None) -> ProviderProfile | None:
+        with self.Session() as session:
+            query = select(ProviderRecord).where(ProviderRecord.owner_user_id == int(user_id))
+            if name:
+                query = query.where(ProviderRecord.name == name)
+            else:
+                query = query.where(ProviderRecord.is_active.is_(True))
+            record = session.scalars(query).first()
+            return self._to_profile(record) if record else None
 
-    def get(self, name: str | None = None) -> ProviderProfile | None:
-        selected = name or self.active_name
-        if not selected or selected not in self._state["providers"]:
-            return None
-        profile = ProviderProfile.from_dict({"name": selected, **self._state["providers"][selected]})
+    def upsert(self, user_id: int, profile: ProviderProfile) -> None:
         profile.validate()
-        return profile
+        owner = int(user_id)
+        now = self._now()
+        with self.Session.begin() as session:
+            record = session.scalars(
+                select(ProviderRecord).where(
+                    ProviderRecord.owner_user_id == owner,
+                    ProviderRecord.name == profile.name,
+                )
+            ).first()
+            if record is None:
+                record = ProviderRecord(
+                    owner_user_id=owner,
+                    name=profile.name,
+                    created_at=now,
+                    updated_at=now,
+                    is_active=False,
+                )
+                session.add(record)
+            record.api_key_encrypted = self._encrypt(profile.api_key)
+            record.base_url = profile.base_url
+            record.model = profile.model
+            record.response_format = profile.response_format
+            record.max_tokens_param = profile.max_tokens_param
+            record.timeout_seconds = profile.timeout_seconds
+            record.max_retries = profile.max_retries
+            record.reasoning_effort = profile.reasoning_effort
+            record.updated_at = now
+            if session.scalars(
+                select(ProviderRecord.id).where(
+                    ProviderRecord.owner_user_id == owner,
+                    ProviderRecord.is_active.is_(True),
+                )
+            ).first() is None:
+                record.is_active = True
 
-    def upsert(self, profile: ProviderProfile) -> None:
-        profile.validate()
-        self._state["providers"][profile.name] = asdict(profile)
-        if not self._state.get("active"):
-            self._state["active"] = profile.name
-        self._save()
+    def activate(self, user_id: int, name: str) -> ProviderProfile:
+        owner = int(user_id)
+        with self.Session.begin() as session:
+            records = session.scalars(select(ProviderRecord).where(ProviderRecord.owner_user_id == owner)).all()
+            selected = next((record for record in records if record.name == name), None)
+            if selected is None:
+                raise ProviderPoolError(f"Provider '{name}' was not found for this user")
+            for record in records:
+                record.is_active = record.id == selected.id
+                record.updated_at = self._now()
+            return self._to_profile(selected)
 
-    def activate(self, name: str) -> ProviderProfile:
-        profile = self.get(name)
-        if profile is None:
-            raise ProviderPoolError(f"Provider '{name}' was not found")
-        self._state["active"] = profile.name
-        self._save()
-        return profile
+    def remove(self, user_id: int, name: str) -> None:
+        owner = int(user_id)
+        with self.Session.begin() as session:
+            records = session.scalars(select(ProviderRecord).where(ProviderRecord.owner_user_id == owner)).all()
+            selected = next((record for record in records if record.name == name), None)
+            if selected is None:
+                raise ProviderPoolError(f"Provider '{name}' was not found for this user")
+            was_active = selected.is_active
+            session.delete(selected)
+            if was_active:
+                remaining = [record for record in records if record.id != selected.id]
+                if remaining:
+                    remaining[0].is_active = True
+                    remaining[0].updated_at = self._now()
 
-    def remove(self, name: str) -> None:
-        if name not in self._state["providers"]:
-            raise ProviderPoolError(f"Provider '{name}' was not found")
-        del self._state["providers"][name]
-        if self._state.get("active") == name:
-            self._state["active"] = next(iter(self._state["providers"]), "")
-        self._save()
+    def get_preferences(self, user_id: int) -> dict[str, str]:
+        owner = int(user_id)
+        with self.Session.begin() as session:
+            record = session.get(UserPreferenceRecord, owner)
+            if record is None:
+                record = UserPreferenceRecord(user_id=owner, language="English", default_niche="", style="professional", updated_at=self._now())
+                session.add(record)
+            return {
+                "language": record.language,
+                "default_niche": record.default_niche,
+                "style": record.style,
+            }
+
+    def get_preference(self, user_id: int, key: str, default: str = "") -> str:
+        return self.get_preferences(user_id).get(key, default)
+
+    def set_preference(self, user_id: int, key: str, value: str) -> None:
+        if key not in ALLOWED_PREFERENCE_KEYS:
+            raise ProviderPoolError(f"Supported preferences: {', '.join(sorted(ALLOWED_PREFERENCE_KEYS))}")
+        value = value.strip()
+        if key == "language" and value.lower() != "english":
+            raise ProviderPoolError("This English-language build supports only language=English")
+        if len(value) > 255:
+            raise ProviderPoolError("Preference value is too long")
+        owner = int(user_id)
+        with self.Session.begin() as session:
+            record = session.get(UserPreferenceRecord, owner)
+            if record is None:
+                record = UserPreferenceRecord(user_id=owner, language="English", default_niche="", style="professional", updated_at=self._now())
+                session.add(record)
+            setattr(record, key, value)
+            record.updated_at = self._now()

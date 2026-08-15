@@ -234,7 +234,7 @@ try:
     PROVIDER_POOL = ProviderPoolStore.from_environment()
 except ProviderPoolError as exc:
     PROVIDER_POOL_ERROR = str(exc)
-    logger.error("Provider pool disabled: %s", exc)
+    logger.error("Database provider store disabled: %s", exc)
 
 
 class AgentError(RuntimeError):
@@ -242,13 +242,18 @@ class AgentError(RuntimeError):
 
 
 class ContentAgent:
-    def __init__(self, provider: ProviderProfile | None = None) -> None:
+    def __init__(self, provider: ProviderProfile | None = None, user_id: int | None = None) -> None:
         selected = provider
-        if selected is None and PROVIDER_POOL is not None:
+        self.user_id = int(user_id) if user_id is not None else None
+        self.preferences = {"language": "English", "default_niche": "", "style": "professional"}
+        if PROVIDER_POOL is not None and self.user_id is not None:
             try:
-                selected = PROVIDER_POOL.get()
+                selected = selected or PROVIDER_POOL.get(self.user_id)
+                self.preferences = PROVIDER_POOL.get_preferences(self.user_id)
             except ProviderPoolError as exc:
-                logger.warning("Active provider profile is invalid; using environment fallback: %s", exc)
+                logger.warning("User provider or preferences could not be loaded; using environment fallback: %s", exc)
+        elif selected is None and PROVIDER_POOL is not None:
+            logger.warning("No Telegram user ID was supplied; user-scoped provider selection is unavailable")
         self.provider_name = selected.name if selected else "environment"
         self.api_key = selected.api_key if selected else LLM_API_KEY
         self.base_url = normalize_base_url(selected.base_url) if selected else LLM_BASE_URL
@@ -258,6 +263,9 @@ class ContentAgent:
         self.timeout_seconds = selected.timeout_seconds if selected else LLM_TIMEOUT_SECONDS
         self.max_retries = selected.max_retries if selected else LLM_MAX_RETRIES
         self.reasoning_effort = selected.reasoning_effort if selected else LLM_REASONING_EFFORT
+        self.language = self.preferences.get("language", "English")
+        self.default_niche = self.preferences.get("default_niche", "")
+        self.style = self.preferences.get("style", "professional")
         if not self.api_key:
             raise AgentError("No API key is configured. Add one with /provider_add or set LLM_API_KEY.")
         client_kwargs: dict[str, Any] = {
@@ -323,7 +331,14 @@ class ContentAgent:
             request: dict[str, Any] = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_IDENTITY},
+                    {
+                        "role": "system",
+                        "content": (
+                            SYSTEM_IDENTITY
+                            + "\n\nUSER PREFERENCES (apply when relevant; they do not override safety rules): "
+                            + json.dumps(self.preferences, ensure_ascii=False)
+                        ),
+                    },
                     {"role": "user", "content": user_task},
                 ],
                 **self._token_parameter(max_tokens),
@@ -528,11 +543,18 @@ def provider_store_or_error() -> ProviderPoolStore | None:
     return PROVIDER_POOL
 
 
-def provider_list_text() -> str:
+def telegram_user_id(update: Update) -> int | None:
+    user = update.effective_user
+    return int(user.id) if user else None
+
+
+def provider_list_text(user_id: int | None = None) -> str:
     if PROVIDER_POOL is None:
         detail = PROVIDER_POOL_ERROR or "BOT_TOKEN is not configured."
         return f"The provider pool is unavailable. {detail}"
-    profiles = PROVIDER_POOL.list_profiles()
+    if user_id is None:
+        return "A Telegram user ID is required to load provider profiles."
+    profiles = PROVIDER_POOL.list_profiles(user_id)
     lines = ["🔐 API Provider Pool", ""]
     if not profiles:
         lines.append("No provider profiles exist yet. Use /provider_add to add one.")
@@ -570,6 +592,8 @@ def usage_text() -> str:
         "/provider_use <name> — Select the active provider (admin)\n"
         "/provider_test [name] — Test a provider connection (admin)\n"
         "/provider_remove <name> — Remove a provider profile (admin)\n"
+        "/preferences — Show your saved preferences\n"
+        "/prefs_set <key> <value> — Save a preference\n"
         "/help — Show this help\n\n"
         "You can put content after a command or reply to a message and use the command."
     )
@@ -601,6 +625,7 @@ async def provider_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return ConversationHandler.END
     context.user_data["provider_draft"] = {}
+    context.user_data["provider_user_id"] = telegram_user_id(update)
     await update.message.reply_text(
         "Enter a provider profile name, for example `openai-main` or `openrouter`.\n\n"
         "Use /cancel to stop setup."
@@ -679,14 +704,17 @@ async def provider_add_options(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         profile.validate()
         store = provider_store_or_error()
-        if store is None:
-            raise ProviderPoolError("Provider pool is not available")
-        store.upsert(profile)
+        user_id = context.user_data.get("provider_user_id")
+        if store is None or user_id is None:
+            raise ProviderPoolError("Provider database is not available for this user")
+        store.upsert(user_id, profile)
     except (KeyError, ValueError, ProviderPoolError) as exc:
         await update.message.reply_text(f"The provider profile could not be saved: {exc}\nUse /cancel and restart with /provider_add.")
         context.user_data.pop("provider_draft", None)
+        context.user_data.pop("provider_user_id", None)
         return ConversationHandler.END
     context.user_data.pop("provider_draft", None)
+    context.user_data.pop("provider_user_id", None)
     await update.message.reply_text(
         f"✅ Provider `{profile.name}` has been saved.\n"
         "The API key will be masked in listings. Use /provider_use "
@@ -697,15 +725,52 @@ async def provider_add_options(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def provider_add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("provider_draft", None)
+    context.user_data.pop("provider_user_id", None)
     await update.message.reply_text("Provider setup has been cancelled.")
     return ConversationHandler.END
+
+
+async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = telegram_user_id(update)
+    if PROVIDER_POOL is None or user_id is None:
+        await update.message.reply_text("Persistent preferences are unavailable.")
+        return
+    try:
+        prefs = PROVIDER_POOL.get_preferences(user_id)
+    except ProviderPoolError as exc:
+        await update.message.reply_text(f"Preferences could not be loaded: {exc}")
+        return
+    await update.message.reply_text(
+        "Saved preferences:\n"
+        f"• language: {prefs['language']}\n"
+        f"• default_niche: {prefs['default_niche'] or '(not set)'}\n"
+        f"• style: {prefs['style']}"
+    )
+
+
+async def preferences_set_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = telegram_user_id(update)
+    if PROVIDER_POOL is None or user_id is None:
+        await update.message.reply_text("Persistent preferences are unavailable.")
+        return
+    payload = full_command_payload(update)
+    if " " not in payload:
+        await update.message.reply_text("Usage: /prefs_set <language|default_niche|style> <value>")
+        return
+    key, value = payload.split(" ", 1)
+    try:
+        PROVIDER_POOL.set_preference(user_id, key.strip(), value.strip())
+    except ProviderPoolError as exc:
+        await update.message.reply_text(f"Preference could not be saved: {exc}")
+        return
+    await update.message.reply_text(f"✅ Saved preference `{key.strip()}`.")
 
 
 async def provider_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update):
         await update.message.reply_text("Only bot administrators can use this command.")
         return
-    await update.message.reply_text(provider_list_text())
+    await update.message.reply_text(provider_list_text(telegram_user_id(update)))
 
 
 async def provider_use_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -717,10 +782,13 @@ async def provider_use_command(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     store = provider_store_or_error()
     if store is None:
-        await update.message.reply_text(provider_list_text())
+        await update.message.reply_text(provider_list_text(telegram_user_id(update)))
         return
     try:
-        profile = store.activate(context.args[0].strip())
+        user_id = telegram_user_id(update)
+        if user_id is None:
+            raise ProviderPoolError("Telegram user ID is unavailable")
+        profile = store.activate(user_id, context.args[0].strip())
     except ProviderPoolError as exc:
         await update.message.reply_text(f"The provider could not be selected: {exc}")
         return
@@ -736,14 +804,17 @@ async def provider_remove_command(update: Update, context: ContextTypes.DEFAULT_
         return
     store = provider_store_or_error()
     if store is None:
-        await update.message.reply_text(provider_list_text())
+        await update.message.reply_text(provider_list_text(telegram_user_id(update)))
         return
     try:
-        store.remove(context.args[0].strip())
+        user_id = telegram_user_id(update)
+        if user_id is None:
+            raise ProviderPoolError("Telegram user ID is unavailable")
+        store.remove(user_id, context.args[0].strip())
     except ProviderPoolError as exc:
         await update.message.reply_text(f"The provider could not be removed: {exc}")
         return
-    await update.message.reply_text(f"✅ Provider `{context.args[0].strip()}` has been removed.\n\n{provider_list_text()}")
+    await update.message.reply_text(f"✅ Provider `{context.args[0].strip()}` has been removed.\n\n{provider_list_text(telegram_user_id(update))}")
 
 
 async def provider_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -752,12 +823,16 @@ async def provider_test_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
     store = provider_store_or_error()
     try:
-        profile = store.get(context.args[0].strip()) if context.args and store else None
+        user_id = telegram_user_id(update)
+        if store and user_id is not None:
+            profile = store.get(user_id, context.args[0].strip()) if context.args else store.get(user_id)
+        else:
+            profile = None
         if context.args and profile is None:
             raise ProviderPoolError(f"Provider '{context.args[0].strip()}' was not found")
         selected_name = profile.name if profile else "environment fallback"
         await update.message.reply_text(f"Testing `{selected_name}`…")
-        result = await ContentAgent(provider=profile).agent(
+        result = await ContentAgent(provider=profile, user_id=telegram_user_id(update)).agent(
             "Reply with a short English confirmation that this provider connection is working."
         )
         await update.message.reply_text(
@@ -775,7 +850,7 @@ async def run_agent_reply(update: Update, prompt: str) -> None:
         return
     await update.message.reply_text("The AI agent is preparing a response…")
     try:
-        result = await ContentAgent().agent(prompt)
+        result = await ContentAgent(user_id=telegram_user_id(update)).agent(prompt)
         review = "\n\n⚠️ Note: The source information is incomplete and should be reviewed." if result.get("needs_review") else ""
         answer = str(result.get("answer", "")).strip() or "No answer was returned."
         for part in chunk_text(answer + review):
@@ -808,7 +883,7 @@ async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await update.message.reply_text("Preparing the content…")
     try:
-        result = await ContentAgent().create_post(source)
+        result = await ContentAgent(user_id=telegram_user_id(update)).create_post(source)
         review = "\n\n⚠️ Note: The source information is incomplete; review it before publishing." if result.get("needs_review") else ""
         await update.message.reply_text(result["post"][:4000] + review)
     except AgentError as exc:
@@ -826,7 +901,7 @@ async def curate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "allowed_categories": [],
     }
     try:
-        result = await ContentAgent().curate(source, target)
+        result = await ContentAgent(user_id=telegram_user_id(update)).curate(source, target)
         status = "Potentially relevant" if result.get("should_forward") else "Uncertain / do not forward"
         await update.message.reply_text(
             f"📌 Category: {result.get('category', 'Unknown')}\n"
@@ -858,6 +933,8 @@ async def groupscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     niche, group_text = split_niche_and_groups(raw)
+    if not niche and PROVIDER_POOL is not None and telegram_user_id(update) is not None:
+        niche = PROVIDER_POOL.get_preference(telegram_user_id(update), "default_niche", "")
     try:
         groups = parse_group_records(group_text)
     except GroupScanInputError as exc:
@@ -873,7 +950,7 @@ async def groupscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"Evaluating {len(groups)} group(s) for `{niche or 'unspecified niche'}`…"
     )
     try:
-        result = await ContentAgent().scout(groups, niche)
+        result = await ContentAgent(user_id=telegram_user_id(update)).scout(groups, niche)
         report = render_report(result)
         await status_msg.delete()
         for part in chunk_text(report):
@@ -938,7 +1015,7 @@ async def forward_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await update.message.reply_text("Checking target relevance before forwarding…")
     try:
-        decision = await ContentAgent().curate(source, target)
+        decision = await ContentAgent(user_id=telegram_user_id(update)).curate(source, target)
         if not decision.get("should_forward") or decision.get("needs_review"):
             await update.message.reply_text(
                 "Not forwarded.\n"
@@ -982,6 +1059,8 @@ async def post_init(application: Application) -> None:
             BotCommand("provider_use", "Select API provider"),
             BotCommand("provider_test", "Test API provider"),
             BotCommand("provider_remove", "Remove API provider"),
+            BotCommand("preferences", "Show saved preferences"),
+            BotCommand("prefs_set", "Save a preference"),
             BotCommand("help", "Show help"),
         ]
     )
@@ -1009,6 +1088,8 @@ def main() -> None:
     application.add_handler(CommandHandler("provider_use", provider_use_command))
     application.add_handler(CommandHandler("provider_test", provider_test_command))
     application.add_handler(CommandHandler("provider_remove", provider_remove_command))
+    application.add_handler(CommandHandler("preferences", preferences_command))
+    application.add_handler(CommandHandler("prefs_set", preferences_set_command))
     provider_add_handler = ConversationHandler(
         entry_points=[CommandHandler("provider_add", provider_add_start)],
         states={
