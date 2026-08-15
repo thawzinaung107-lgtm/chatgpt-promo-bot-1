@@ -1,14 +1,14 @@
-# Telegram GroupScan အသုံးပြုနည်းလမ်းညွှန်
+# Telegram GroupScan Usage Guide
 
-## ၁။ GroupScan ဆိုတာဘာလဲ
+## 1. What GroupScan does
 
-`GroupScan` သည် Telegram group များ၏ **အမည်၊ description နှင့် member count** ကို user ကပေးသွင်းသည့် metadata အပေါ်အခြေခံပြီး target niche နှင့် ကိုက်ညီမှုကို စစ်ဆေးပေးသော feature ဖြစ်ပါတယ်။ ရလဒ်အနေဖြင့် group တစ်ခုချင်းစီကို `TARGET`, `REVIEW` သို့မဟုတ် `EXCLUDE` အဖြစ် အကြံပြုပေးပြီး spam signal နှင့် relevance evidence များကိုလည်း ဖော်ပြပေးပါတယ်။
+`GroupScan` evaluates Telegram groups against a target niche using only the group metadata you provide: **group name, description, and member count**. It returns a recommendation of `TARGET`, `REVIEW`, or `EXCLUDE`, together with a relevance score, spam flags, and supporting evidence.
 
-> GroupScan သည် group များကို အလိုအလျောက်ရှာဖွေခြင်း၊ join ဝင်ခြင်း၊ message ပို့ခြင်း သို့မဟုတ် အဖွဲ့၏ တကယ့် engagement ကို တိုင်းတာခြင်း မလုပ်ပါ။ User ပေးထားသည့် အချက်အလက်များကိုသာ အကဲဖြတ်ပါတယ်။
+> GroupScan does not automatically discover groups, join groups, send messages, or measure real engagement. It evaluates the supplied metadata only.
 
-## ၂။ မစတင်မီ လိုအပ်ချက်များ
+## 2. Requirements
 
-Bot သည် run နေရပါမယ်။ AI provider profile မထည့်ရသေးပါက admin သည် private chat မှာ အောက်ပါအတိုင်း provider ကို အရင်ပြင်ဆင်ပါ။
+The bot must be running and connected to an AI provider. If you use the in-bot provider pool, an administrator can configure a provider from a private chat:
 
 ```text
 /provider_add
@@ -16,57 +16,57 @@ Bot သည် run နေရပါမယ်။ AI provider profile မထည့�
 /provider_use <provider_name>
 ```
 
-လက်ရှိ active provider ကို စစ်လိုပါက `/provider_list` ကို အသုံးပြုနိုင်ပါတယ်။ Provider pool မသုံးဘဲ environment variable ဖြင့် တိုက်ရိုက်ချိတ်ထားပါက `LLM_API_KEY`, `LLM_BASE_URL` နှင့် `LLM_MODEL` သတ်မှတ်ထားရုံနဲ့ ရပါတယ်။
+Use `/provider_list` to confirm the active profile. If you use environment-based configuration instead, set `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`.
 
-GroupScan ကို chat တချို့မှာသာ ခွင့်ပြုထားလျှင် `GROUPSCAN_ALLOWED_CHAT_IDS` environment variable ထဲတွင် သတ်မှတ်ထားသော chat များအတွင်းကသာ command အလုပ်လုပ်ပါမယ်။ လက်ရှိ chat ID ကို သိလိုပါက group ထဲမှာ အောက်ပါ command ကိုသုံးပါ။
+If GroupScan should be restricted to specific chats, configure `GROUPSCAN_ALLOWED_CHAT_IDS`. Use the following command inside a group to see its chat ID:
 
 ```text
 /id
 ```
 
-## ၃။ အဓိက command များ
+## 3. Main commands
 
-| Command | အသုံးပြုပုံ | ရည်ရွယ်ချက် |
+| Command | Example | Purpose |
 |---|---|---|
-| `/groupscan <niche>` | `/groupscan AI tools` | Group list ကို သတ်မှတ်ထားသော niche နှင့် စစ်ရန် |
-| `/scout <niche>` | `/scout digital marketing` | `/groupscan` ၏ backward-compatible alias ဖြစ်သည် |
-| `/id` | `/id` | လက်ရှိ Telegram chat ID ကို ပြရန် |
-| `/help` | `/help` | Bot command များအားလုံးကို ပြရန် |
+| `/groupscan <niche>` | `/groupscan AI tools` | Evaluate a supplied group list against a niche. |
+| `/scout <niche>` | `/scout digital marketing` | Backward-compatible alias for `/groupscan`. |
+| `/id` | `/id` | Show the current Telegram chat ID. |
+| `/help` | `/help` | Show the bot command list. |
 
-အကြံပြုထားသော command သည် `/groupscan` ဖြစ်ပြီး `/scout` သည် အရင်အသုံးပြုနေသူများအတွက် ဆက်လက်ထားရှိသည့် alias ဖြစ်ပါတယ်။
+`/groupscan` is the recommended command. `/scout` remains available for backward compatibility.
 
-## ၄။ Inline text ဖြင့် စစ်ဆေးခြင်း
+## 4. Scan inline text
 
-Command နောက်တွင် ပထမစာကြောင်းကို target niche အဖြစ် ထည့်ပြီး နောက်စာကြောင်းများမှာ group record များဖြစ်ရပါမယ်။ Pipe `|` သုံးပြီး format ကို ခွဲပါ။
+Put the target niche on the first line and one group record per line after it. Separate each record with pipe characters:
 
 ```text
 /groupscan AI tools
-AI Myanmar | မြန်မာဘာသာ AI tools နှင့် productivity ဆွေးနွေးခြင်း | 12K
-Marketing MM | Digital marketing နှင့် ads | 850
-Crypto Deals | token giveaways နှင့် instant profit | 45K
+AI Myanmar | AI tools and productivity discussion | 12K
+Marketing MM | Digital marketing and advertising | 850
+Crypto Deals | Token giveaways and instant profit | 45K
 ```
 
-Record format မှာ အောက်ပါအတိုင်းဖြစ်ပါတယ်။
+The record format is:
 
 ```text
 Group Name | Group Description | Member Count
 ```
 
-`12K`, `1.5M`, `850` နှင့် comma ပါသော `12,000` ကဲ့သို့သော member count များကို bot က နားလည်နိုင်ပါတယ်။ Member count မသိပါက အလွတ်ထားနိုင်သော်လည်း quality score ကို `unknown` သို့မဟုတ် `review` အဖြစ် ပြန်လာနိုင်ပါတယ်။
+The parser accepts member counts such as `12K`, `1.5M`, `850`, and `12,000`. You may leave the member count blank when it is unavailable, but the result may be marked `UNKNOWN` or `REVIEW` because the evidence is incomplete.
 
-## ၅။ ရှိပြီးသား message ကို reply လုပ်ပြီး စစ်ဆေးခြင်း
+## 5. Scan a replied message
 
-Group list သို့မဟုတ် group metadata ပါသော message တစ်ခုကို reply လုပ်ပြီး command သုံးနိုင်ပါတယ်။
+You can reply to a message containing a group list and use the command:
 
 ```text
 /groupscan AI tools
 ```
 
-Niche မထည့်ဘဲ list message ကို reply လုပ်ပြီး `/groupscan` သုံးပါက bot သည် ပေးထားသော data မှ context ကို အသုံးပြုပြီး စစ်ဆေးပါမယ်။ သို့သော် niche ကို တိတိကျကျ ထည့်ပေးခြင်းက ပိုမိုတိကျသော relevance score ရရှိစေပါတယ်။
+If you reply to a group-list message without specifying a niche, use `/groupscan`. Providing a clear niche is recommended because it produces a more useful relevance score.
 
-## ၆။ Text, CSV သို့မဟုတ် JSON file upload ဖြင့် စစ်ဆေးခြင်း
+## 6. Scan an uploaded TXT, CSV, or JSON file
 
-Group list အများကြီးရှိပါက UTF-8 encoded `.txt`, `.csv` သို့မဟုတ် `.json` file ကို Bot ထံ upload လုပ်ပါ။ ထို့နောက် file message ကို reply လုပ်ပြီး အောက်ပါ command ကိုသုံးပါ။
+For a larger list, upload a UTF-8 `.txt`, `.csv`, or `.json` file to the bot. Reply to the uploaded file with:
 
 ```text
 /groupscan AI tools
@@ -74,38 +74,36 @@ Group list အများကြီးရှိပါက UTF-8 encoded `.txt`, `
 
 ### CSV format
 
-CSV file တွင် header row ပါရပါမယ်။ အောက်ပါ column names များကို အသုံးပြုနိုင်ပါတယ်။
+CSV input should include a header row. The accepted logical fields are `name` or `group_name`, `description` or `bio`, and `members` or `member_count`.
 
 ```csv
 name,description,members
-AI Myanmar,AI tools ဆွေးနွေးခြင်း,12K
-Marketing MM,Digital marketing နှင့် ads,850
+AI Myanmar,AI tools discussion,12K
+Marketing MM,Digital marketing and advertising,850
 ```
-
-`name` အစား `group_name`၊ `description` အစား `bio`၊ `members` အစား `member_count` ကိုလည်း အသုံးပြုနိုင်ပါတယ်။
 
 ### JSON format
 
-JSON file သို့မဟုတ် message ကို အောက်ပါပုံစံနဲ့ ထည့်နိုင်ပါတယ်။
+You may provide an object containing a `groups` array:
 
 ```json
 {
   "groups": [
     {
       "name": "AI Myanmar",
-      "description": "မြန်မာဘာသာ AI tools ဆွေးနွေးခြင်း",
+      "description": "AI tools discussion",
       "member_count": "12K"
     },
     {
       "name": "Marketing MM",
-      "description": "Digital marketing နှင့် ads",
+      "description": "Digital marketing and advertising",
       "member_count": 850
     }
   ]
 }
 ```
 
-JSON array တိုက်ရိုက်ပုံစံကိုလည်း လက်ခံပါတယ်။
+A direct JSON array is also accepted:
 
 ```json
 [
@@ -113,58 +111,58 @@ JSON array တိုက်ရိုက်ပုံစံကိုလည်း �
 ]
 ```
 
-## ၇။ Report ကို ဘယ်လိုဖတ်မလဲ
+## 7. Read the GroupScan report
 
-GroupScan report တွင် group တစ်ခုချင်းစီအတွက် အောက်ပါအချက်များ ပါဝင်ပါတယ်။
+The report contains the following fields:
 
-| Field | အဓိပ္ပာယ် |
+| Field | Meaning |
 |---|---|
-| `0–100 score` | Target niche နှင့် content relevance ကိုသာ အခြေခံထားသော fit score ဖြစ်သည်။ Popularity score မဟုတ်ပါ။ |
-| `TARGET` | ပေးထားသော metadata အပေါ်အခြေခံ၍ target list ထဲသို့ ထည့်ရန် သင့်လျော်နိုင်သည်။ |
-| `REVIEW` | Information မလုံလောက်ခြင်း သို့မဟုတ် relevance/quality မသေချာခြင်းကြောင့် လူက ပြန်စစ်ရန်လိုသည်။ |
-| `EXCLUDE` | Niche မကိုက်ညီခြင်း၊ spam signal ရှိခြင်း သို့မဟုတ် မသင့်လျော်သော group ဖြစ်နိုင်ခြေကြောင့် မထည့်သင့်ပါ။ |
-| `SPAM FLAG` | Input description သို့မဟုတ် name ထဲတွင် spam ဆန်သော signal တွေ့ရှိထားသည်။ |
-| `IRRELEVANT` | Target niche နှင့် မကိုက်ညီသော signal ရှိသည်။ |
-| `HIGH / MEDIUM / LOW / UNKNOWN` | ပေးထားသော input က ပြသထားသည့် quality signal အဆင့်ဖြစ်သည်။ `UNKNOWN` ဆိုသည်မှာ လုံလောက်သော evidence မရှိခြင်းဖြစ်သည်။ |
-| `Evidence` | Score သို့မဟုတ် action ပြုလုပ်ရာတွင် model က အသုံးပြုထားသော supplied input အပိုင်းများဖြစ်သည်။ |
+| `0–100 score` | Estimated niche relevance based only on the supplied metadata. It is not a popularity or engagement score. |
+| `TARGET` | The supplied evidence suggests that the group may be suitable for the target niche. |
+| `REVIEW` | The information is incomplete or ambiguous and requires human review. |
+| `EXCLUDE` | The group appears irrelevant or contains negative signals in the supplied metadata. |
+| `SPAM FLAG` | The name or description contains a spam-like signal. |
+| `IRRELEVANT` | The supplied information does not match the target niche. |
+| `HIGH / MEDIUM / LOW / UNKNOWN` | The quality label inferred from the supplied evidence. `UNKNOWN` means there is not enough evidence. |
+| `Evidence` | The supplied input that supports the model’s reason or action. |
 
-ဥပမာ report တစ်ခုမှာ အောက်ပါအတိုင်း ပြနိုင်ပါတယ်။
+Example output:
 
 ```text
 • AI Myanmar — 90/100 | HIGH | TARGET
-  Niche description နှင့် တိုက်ရိုက်ကိုက်ညီသည်။
-  Evidence: AI tools; မြန်မာဘာသာဆွေးနွေးခြင်း
+  The description directly matches the target niche.
+  Evidence: AI tools; productivity discussion
 
 • Crypto Deals — 10/100 | LOW | EXCLUDE | SPAM FLAG
-  Instant profit နှင့် giveaway ဆန်သော description ဖြစ်သည်။
+  The description contains instant-profit and giveaway signals.
   Evidence: instant profit; giveaways
 ```
 
-Report ထဲတွင် `TARGET` ဖြစ်လာသော်လည်း bot သည် group ကို အလိုအလျောက် join ဝင်ခြင်း၊ target list ထဲသို့ auto-save လုပ်ခြင်း သို့မဟုတ် message ပို့ခြင်း မလုပ်ပါ။ လူက final review ပြုလုပ်ပြီး သင့်တော်သော action ကို ကိုယ်တိုင်ဆုံးဖြတ်ရပါမယ်။
+A `TARGET` result is only a recommendation. The bot does not automatically save the group to the target list, join it, or send promotional messages. Review the evidence and make the final decision manually.
 
-## ၈။ အကောင်းဆုံးအသုံးပြုနည်း
+## 8. Recommended workflow
 
-ပထမဦးစွာ target niche ကို တိတိကျကျ သတ်မှတ်ပါ။ ဥပမာ `AI tools for Myanmar creators` သို့မဟုတ် `Burmese digital marketing` ကဲ့သို့ ရေးပါ။ ထို့နောက် group name, description နှင့် member count ကို source တစ်ခုတည်းမှ စုစည်းပြီး format တူအောင် ပြင်ဆင်ပါ။ GroupScan ပြီးလျှင် `TARGET` ကိုသာ ချက်ချင်းမယုံဘဲ description နှင့် evidence ကို ပြန်ဖတ်ပါ။ `REVIEW` ဖြစ်သော group များကို လူက ထပ်မံစစ်ဆေးပြီး `EXCLUDE` နှင့် `SPAM FLAG` များကို မသုံးသင့်ပါ။
+First define a specific niche, such as `AI tools for content creators` or `digital marketing for Myanmar businesses`. Then collect group names, descriptions, and member counts from a reliable source and normalize them into one input format. Run GroupScan and review the evidence behind each `TARGET`, `REVIEW`, and `EXCLUDE` result. Treat `REVIEW` as a human-verification queue and avoid using groups marked `EXCLUDE` or `SPAM FLAG`.
 
-Member count အများကြီးရှိခြင်းသည် engagement ကောင်းသည်ဟု မဆိုလိုပါ။ ထို့ကြောင့် GroupScan ကို **အကြို filter** အဖြစ် အသုံးပြုပြီး final audience-quality decision ကို လူကသာ ပြုလုပ်သင့်ပါတယ်။
+A large member count does not prove that a group has good engagement or a high-quality audience. GroupScan should be used as a **pre-filter**, not as a substitute for human audience-quality review.
 
-## ၉။ Common errors နှင့် ဖြေရှင်းနည်း
+## 9. Common errors
 
-| Error | ဖြေရှင်းနည်း |
+| Error | Resolution |
 |---|---|
-| `Group record မတွေ့ပါ` | `Group Name | Description | Member Count` format ကို စစ်ပါ။ JSON သုံးပါက `name` field မဖြစ်မနေပါရမယ်။ |
-| `Group format မမှန်ပါ` | Pipe `|` သို့မဟုတ် valid CSV/JSON format သုံးပါ။ File သည် UTF-8 ဖြစ်ရပါမယ်။ |
-| `ဒီ chat ကို GroupScan အသုံးပြုခွင့် allowlist ထဲတွင် မထည့်ရသေးပါ` | `/id` ဖြင့် chat ID ရယူပြီး `GROUPSCAN_ALLOWED_CHAT_IDS` ထဲထည့်ပါ။ |
-| `The language model request failed` | `/provider_test <name>` ဖြင့် API profile စစ်ပါ။ Endpoint, API key, model ID နှင့် response format setting ကို ပြန်စစ်ပါ။ |
-| `GroupScan result did not contain...` | Model output မပြည့်စုံခြင်းဖြစ်နိုင်ပါတယ်။ Request ကို အုပ်စုနည်းနည်းခွဲပြီး ပြန်စမ်းပါ။ |
-| Result အားလုံး `REVIEW` ဖြစ်နေခြင်း | Description မလုံလောက်ခြင်း သို့မဟုတ် niche မရှင်းခြင်းဖြစ်နိုင်ပါတယ်။ Group description နှင့် target niche ကို ပိုတိကျအောင် ထည့်ပါ။ |
+| `No group records were found` | Use `Group Name | Description | Member Count`, a valid CSV header, or valid JSON with a `name` field. |
+| `Invalid GroupScan input` | Confirm that the text uses pipe-delimited, CSV, or JSON syntax and that uploaded files are UTF-8. |
+| `This chat is not included in the GroupScan allowlist` | Use `/id` to get the chat ID and add it to `GROUPSCAN_ALLOWED_CHAT_IDS`. |
+| `The language model request failed` | Run `/provider_test <name>` and verify the API key, endpoint, model ID, and response-format settings. |
+| `GroupScan result did not contain one matching result per supplied group` | The model returned an incomplete result. Split a large scan into smaller batches and try again. |
+| Many groups are marked `REVIEW` | The descriptions may be too vague or the target niche may not be specific enough. |
 
-## ၁၀။ လက်ရှိကန့်သတ်ချက်များ
+## 10. Limits and known boundaries
 
-Default setting အရ scan တစ်ကြိမ်တွင် group အများဆုံး `50` ခုနှင့် UTF-8 input file အများဆုံး `1,000,000` bytes ကို လက်ခံပါတယ်။ `GROUPSCAN_MAX_GROUPS` နှင့် `GROUPSCAN_MAX_FILE_BYTES` environment variables ဖြင့် ပြောင်းနိုင်ပါတယ်။
+By default, one scan accepts up to `50` groups and a UTF-8 input file up to `1,000,000` bytes. Configure `GROUPSCAN_MAX_GROUPS` and `GROUPSCAN_MAX_FILE_BYTES` to change these limits.
 
-GroupScan သည် user ပေးထားသော metadata ကိုသာ အသုံးပြုသောကြောင့် actual member activity, recent posts, engagement rate, admin quality, group privacy status သို့မဟုတ် real-time membership ကို အတည်ပြုမပေးနိုင်ပါ။ မပေးထားသော facts များကို bot က မဖန်တီးစေရန် design လုပ်ထားပါတယ်။
+GroupScan cannot verify real member activity, recent posts, engagement rates, administrator quality, privacy status, or current membership. It uses only the metadata supplied by the user and is designed not to invent unsupported facts.
 
 ---
 
-**အကျဉ်းချုပ်:** Target niche ကို အရင်သတ်မှတ်ပါ၊ group metadata ကို format တူအောင် စုစည်းပါ၊ `/groupscan <niche>` ဖြင့် စစ်ပါ၊ ပြီးလျှင် `TARGET / REVIEW / EXCLUDE` နှင့် evidence ကို လူက final review လုပ်ပါ။
+**Summary:** Define a clear niche, prepare consistent group metadata, run `/groupscan <niche>`, and manually review the evidence behind each `TARGET`, `REVIEW`, and `EXCLUDE` recommendation.

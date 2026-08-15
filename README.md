@@ -1,19 +1,19 @@
 # Telegram AI Content Strategist & Growth Manager
 
-A Burmese-first Telegram AI agent for content creation, smart curation, protected forwarding, and Telegram group scouting. The bot is designed around the supplied identity: it writes engaging mobile-friendly posts, adds context before forwarding, and evaluates candidate groups using only their supplied name, description, and member count.
+An English-first Telegram AI agent for content creation, smart curation, protected forwarding, and Telegram group scouting. The bot is designed around the supplied identity: it writes engaging mobile-friendly posts, adds context before forwarding, and evaluates candidate groups using only their supplied name, description, and member count.
 
 ## Safety boundary
 
 This repository now contains only the content-strategy bot. The previous unrelated promo-scanning and token-handling logic has been removed. The bot does not request, store, decode, validate, or transmit access tokens or private account credentials.
 
-The model is instructed not to invent facts, news, statistics, engagement, or group characteristics. Smart forwarding is disabled unless the target is explicitly present in `TARGETS_JSON`, the requester is listed in `ADMIN_IDS`, the content is text/caption-readable, and the model returns a confident relevance decision with a Burmese context intro.
+The model is instructed not to invent facts, news, statistics, engagement, or group characteristics. Smart forwarding is disabled unless the target is explicitly present in `TARGETS_JSON`, the requester is listed in `ADMIN_IDS`, the content is text/caption-readable, and the model returns a confident relevance decision with an English context intro.
 
 ## Features
 
 | Workflow | Command | Behavior |
 |---|---|---|
-| General AI agent | `/agent <request>` | Uses the configured Telegram strategist identity to answer content, campaign, curation, and growth requests in Burmese by default. |
-| Content creation | `/post <source>` | Converts source material into a Burmese Telegram post with hook, short sections, restrained emojis, and CTA. |
+| General AI agent | `/agent <request>` | Uses the configured Telegram strategist identity to answer content, campaign, curation, and growth requests in English by default. |
+| Content creation | `/post <source>` | Converts source material into an English Telegram post with a hook, short sections, restrained emojis, and a CTA. |
 | Content curation | `/curate <content>` | Classifies the content and drafts a 1–2 sentence context intro without sending anything. |
 | GroupScan scouting | `/groupscan <niche>` or `/scout <niche>` | Scores niche fit, flags spam or irrelevance, and returns `target`, `review`, or `exclude`. Accepts pipe-delimited text, CSV, JSON, or a replied UTF-8 text file. |
 | Chat ID helper | `/id` | Shows the current chat ID so an administrator can configure the GroupScan chat allowlist. |
@@ -53,7 +53,7 @@ Example `TARGETS_JSON`:
   {
     "chat_id": -1001234567890,
     "label": "AI Myanmar",
-    "description": "မြန်မာဘာသာ AI tools နှင့် productivity ဆိုင်ရာ content များ",
+    "description": "AI tools and productivity content for Myanmar audiences",
     "allowed_categories": ["AI", "productivity"]
   }
 ]
@@ -94,8 +94,8 @@ Example GroupScan input:
 
 ```text
 /groupscan AI tools
-AI Myanmar | မြန်မာဘာသာ AI tool များဆွေးနွေးခြင်း | 12K
-Marketing MM | Digital marketing နှင့် ads | 850
+AI Myanmar | AI tools discussion for Myanmar audiences | 12K
+Marketing MM | Digital marketing and advertising | 850
 Crypto Deals | token giveaways and instant profit | 45K
 ```
 
@@ -105,7 +105,7 @@ The same command accepts JSON:
 {"groups":[{"name":"AI Myanmar","description":"AI tools","member_count":"12K"}]}
 ```
 
-For a file workflow, upload a UTF-8 `.txt`, `.csv`, or `.json` file, reply to it with `/groupscan AI tools`, and the bot will parse the metadata. Use `/id` in a group to see its chat ID, then set `GROUPSCAN_ALLOWED_CHAT_IDS` if scanning should be limited to specific chats. See the dedicated Burmese [GroupScan Usage Guide](GROUPSCAN_USAGE_GUIDE.md) for step-by-step examples and troubleshooting.
+For a file workflow, upload a UTF-8 `.txt`, `.csv`, or `.json` file, reply to it with `/groupscan AI tools`, and the bot will parse the metadata. Use `/id` in a group to see its chat ID, then set `GROUPSCAN_ALLOWED_CHAT_IDS` if scanning should be limited to specific chats. See the dedicated English [GroupScan Usage Guide](GROUPSCAN_USAGE_GUIDE.md) for step-by-step examples and troubleshooting.
 
 The bot treats member count as supplied context only. It does not claim that a group is active or high quality merely because it has more members.
 

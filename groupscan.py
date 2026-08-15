@@ -153,7 +153,7 @@ def split_niche_and_groups(raw: str) -> tuple[str, str]:
 
 
 def render_report(result: dict[str, Any]) -> str:
-    """Render a compact mobile-friendly Burmese report from structured model output."""
+    """Render a compact mobile-friendly English report from structured model output."""
     items = result.get("groups", [])
     counts = {"target": 0, "review": 0, "exclude": 0, "spam": 0}
     rows = ["🔎 GroupScan Report", ""]
@@ -178,12 +178,12 @@ def render_report(result: dict[str, Any]) -> str:
             f"• {item.get('name', 'Unknown')} — {score:.0f}/100 | "
             f"{str(item.get('quality_label', 'unknown')).upper()} | {action.upper()}{suffix}"
         )
-        rows.append(f"  {item.get('reason', 'အကြောင်းပြချက် မရရှိပါ။')}")
+        rows.append(f"  {item.get('reason', 'No reason was provided.')}")
         evidence = item.get("evidence", [])
         if evidence:
             rows.append("  Evidence: " + "; ".join(str(x) for x in evidence[:3]))
     summary = (
-        f"စုစုပေါင်း {len(items)} ခု | Target {counts['target']} | "
-        f"Review {counts['review']} | Exclude {counts['exclude']} | Spam flag {counts['spam']}"
+        f"Total {len(items)} | Target {counts['target']} | "
+        f"Review {counts['review']} | Exclude {counts['exclude']} | Spam flags {counts['spam']}"
     )
     return "\n".join(rows + ["", summary])

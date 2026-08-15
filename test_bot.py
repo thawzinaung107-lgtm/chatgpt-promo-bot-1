@@ -10,10 +10,12 @@ os.environ["TARGETS_JSON"] = '[{"chat_id": -1001, "label": "AI MM", "description
 os.environ["LLM_API_KEY"] = "test-key"
 
 import bot
-from bot import TARGETS, ContentAgent, normalize_base_url, parse_groups, parse_member_count
+from bot import SYSTEM_IDENTITY, TARGETS, ContentAgent, normalize_base_url, parse_groups, parse_member_count
 from groupscan import parse_groups as parse_group_records, render_report, split_niche_and_groups
 from provider_pool import ProviderPoolStore, ProviderProfile
 
+assert "Output English by default" in SYSTEM_IDENTITY
+assert "Output " + "Burmese" not in SYSTEM_IDENTITY
 assert parse_member_count("12K") == 12000
 assert parse_member_count("1.5M") == 1500000
 assert parse_member_count("850") == 850
@@ -65,7 +67,7 @@ class FakeCompletions:
         if schema_name == "telegram_group_scout":
             content = '{"groups": [{"name": "AI Myanmar", "fit_score": 90, "match": true, "spam_flag": false, "quality_label": "high", "reason": "Relevant", "evidence": ["AI tools"], "action": "target"}]}'
         elif schema_name == "telegram_agent_answer":
-            content = '{"answer":"မြန်မာလို အကြံပြုချက်","mode":"campaign_planning","source_facts":["source"],"needs_review":false}'
+            content = '{"answer":"English strategy suggestion","mode":"campaign_planning","source_facts":["source"],"needs_review":false}'
         else:
             content = '{"post":"Hook\\n\\nCTA","category":"AI","cta":"CTA","source_facts":["fact"],"needs_review":false}'
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])

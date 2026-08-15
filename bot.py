@@ -55,14 +55,14 @@ Core responsibilities:
    an engaging Telegram post.
 2. Every post must have a strong hook/headline, short mobile-friendly sections,
    appropriate emojis used sparingly, and a clear call-to-action.
-3. For curation or forwarding, write a compelling 1-2 sentence Burmese intro that
+3. For curation or forwarding, write a compelling 1-2 sentence English intro that
    adds context. Never forward content blindly.
 4. Evaluate Telegram groups only from their supplied name, description, and member
    count. Strictly flag spam, irrelevant niches, and groups whose supplied evidence
    indicates low quality.
 
 Non-negotiable rules:
-- Output Burmese by default unless the user explicitly requests English.
+- Output English by default unless the user explicitly requests another language.
 - Never invent facts, news, statistics, engagement, or group characteristics.
 - If the input does not support a claim, say that it is unknown or needs review.
 - Use a professional, authoritative, approachable tone; avoid spammy language.
@@ -378,7 +378,7 @@ class ContentAgent:
             max_tokens=2600,
             task=f"""
 Respond to the user's Telegram strategy request as the configured Content Strategist
-and Growth Manager. Default to Burmese. Choose the most useful mode, such as
+and Growth Manager. Default to English. Choose the most useful mode, such as
 content_creation, curation, campaign_planning, audience_growth, or group_scouting.
 Use only facts supplied in the request. If the user asks for unsupported news,
 statistics, engagement, or audience claims, explain the limitation and set
@@ -389,7 +389,7 @@ USER REQUEST:
 """,
         )
 
-    async def create_post(self, source: str, language: str = "Burmese") -> dict[str, Any]:
+    async def create_post(self, source: str, language: str = "English") -> dict[str, Any]:
         return await self._structured(
             schema_name="telegram_post",
             schema=POST_SCHEMA,
@@ -418,7 +418,7 @@ Target label: {target.get('label', '')}
 Target description: {target.get('description', '')}
 Allowed categories: {allowed}
 
-If relevant, write a compelling 1-2 sentence Burmese intro that adds context before
+If relevant, write a compelling 1-2 sentence English intro that adds context before
 forwarding. Do not repeat unsupported facts. If relevance is uncertain, set
 should_forward to false and needs_review to true. Do not make the intro clickbait.
 
@@ -530,12 +530,12 @@ def provider_store_or_error() -> ProviderPoolStore | None:
 
 def provider_list_text() -> str:
     if PROVIDER_POOL is None:
-        detail = PROVIDER_POOL_ERROR or "BOT_TOKEN မရှိသေးပါ။"
-        return f"Provider pool မရနိုင်သေးပါ။ {detail}"
+        detail = PROVIDER_POOL_ERROR or "BOT_TOKEN is not configured."
+        return f"The provider pool is unavailable. {detail}"
     profiles = PROVIDER_POOL.list_profiles()
     lines = ["🔐 API Provider Pool", ""]
     if not profiles:
-        lines.append("Provider profile မရှိသေးပါ။ /provider_add ဖြင့် ထည့်ပါ။")
+        lines.append("No provider profiles exist yet. Use /provider_add to add one.")
     for item in profiles:
         marker = "✅ ACTIVE" if item["active"] else "○"
         lines.append(
@@ -547,7 +547,7 @@ def provider_list_text() -> str:
     if not profiles and LLM_API_KEY:
         lines.append("\nEnvironment fallback: configured (key hidden)")
     elif profiles:
-        lines.append("\nActive profile ကို /provider_use <name> ဖြင့် ပြောင်းနိုင်ပါတယ်။")
+        lines.append("\nUse /provider_use <name> to change the active profile.")
     return "\n".join(lines)
 
 
@@ -556,29 +556,30 @@ PROVIDER_NAME, PROVIDER_KEY, PROVIDER_ENDPOINT, PROVIDER_MODEL, PROVIDER_OPTIONS
 
 def usage_text() -> str:
     return (
-        "အသုံးပြုနိုင်သော command များ\n\n"
-        "/agent <request> — AI Content Strategist အဖြစ် general request ဖြေရှင်းရန်\n"
-        "/post <အချက်အလက်> — source ကို Burmese Telegram post အဖြစ်ရေးရန်\n"
-        "/curate <content> — target မသတ်မှတ်ဘဲ context intro နှင့် category အကြံပြုရန်\n"
-        "/groupscan <niche>\nအုပ်စုအမည် | description | members — group များစစ်ရန်\n"
-        "/scout — /groupscan ၏ backward-compatible alias\n"
-        "/id — လက်ရှိ chat ID ကြည့်ရန်\n"
-        "/forward <target_chat_id> — reply လုပ်ထားသော message ကို relevance စစ်ပြီး intro နှင့် forward လုပ်ရန်\n"
-        "/targets — ခွင့်ပြုထားသော target channel/group များကြည့်ရန်\n"
-        "/provider_list — API provider profiles ကြည့်ရန် (admin)\n"
-        "/provider_add — API key, endpoint, model profile ထည့်ရန် (admin)\n"
-        "/provider_use <name> — active provider ရွေးရန် (admin)\n"
-        "/provider_test [name] — provider connection စမ်းရန် (admin)\n"
-        "/provider_remove <name> — profile ဖျက်ရန် (admin)\n"
-        "/help — အကူအညီ\n\n"
-        "Content ကို command နောက်တွင်ထည့်နိုင်သလို၊ message တစ်ခုကို reply လုပ်ပြီး command သုံးနိုင်ပါတယ်။"
+        "Available commands\n\n"
+        "/agent <request> — Ask the AI Content Strategist a general request\n"
+        "/post <source> — Turn source material into a Telegram post\n"
+        "/curate <content> — Classify content and draft a context intro\n"
+        "/groupscan <niche>\nGroup Name | description | members — Evaluate groups\n"
+        "/scout — Backward-compatible alias for /groupscan\n"
+        "/id — Show the current chat ID\n"
+        "/forward <target_chat_id> — Curate and forward a replied message\n"
+        "/targets — Show allowed forwarding targets (admin)\n"
+        "/provider_list — List API provider profiles (admin)\n"
+        "/provider_add — Add an API key, endpoint, and model profile (admin)\n"
+        "/provider_use <name> — Select the active provider (admin)\n"
+        "/provider_test [name] — Test a provider connection (admin)\n"
+        "/provider_remove <name> — Remove a provider profile (admin)\n"
+        "/help — Show this help\n\n"
+        "You can put content after a command or reply to a message and use the command."
     )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "မင်္ဂလာပါ။ ကျွန်ုပ်သည် Telegram Content Strategist & Growth Manager ဖြစ်ပါတယ်။\n\n"
-        "Raw information ကို mobile-friendly Burmese post အဖြစ်ပြောင်းပေးနိုင်ပြီး၊ content curation၊ smart forwarding နဲ့ target group evaluation ကိုလည်း လုပ်ပေးနိုင်ပါတယ်။\n\n"
+        "Hello. I am your Telegram Content Strategist & Growth Manager.\n\n"
+        "I can turn raw information into mobile-friendly Telegram posts, curate content, "
+        "perform smart forwarding, evaluate target groups, and manage API provider profiles.\n\n"
         + usage_text()
     )
 
@@ -589,20 +590,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def provider_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not is_admin(update):
-        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        await update.message.reply_text("Only bot administrators can use this command.")
         return ConversationHandler.END
     if not update.effective_chat or update.effective_chat.type != "private":
-        await update.message.reply_text("API key ထည့်ခြင်းကို လုံခြုံရေးအတွက် bot private chat ထဲမှာသာ လုပ်ပါ။")
+        await update.message.reply_text("For security, API-key entry is available only in the bot's private chat.")
         return ConversationHandler.END
     if provider_store_or_error() is None:
         await update.message.reply_text(
-            "Provider pool မရနိုင်သေးပါ။ BOT_TOKEN မရှိခြင်း သို့မဟုတ် PROVIDER_STORE_KEY မမှန်ခြင်း ဖြစ်နိုင်ပါတယ်။"
+            "The provider pool is unavailable. Check BOT_TOKEN or PROVIDER_STORE_KEY."
         )
         return ConversationHandler.END
     context.user_data["provider_draft"] = {}
     await update.message.reply_text(
-        "Provider profile name ထည့်ပါ။ ဥပမာ `openai-main` သို့မဟုတ် `openrouter`\n\n"
-        "Cancel လုပ်ရန် /cancel ကိုသုံးပါ။"
+        "Enter a provider profile name, for example `openai-main` or `openrouter`.\n\n"
+        "Use /cancel to stop setup."
     )
     return PROVIDER_NAME
 
@@ -610,17 +611,17 @@ async def provider_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def provider_add_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     name = (update.message.text or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,39}", name):
-        await update.message.reply_text("Name သည် အင်္ဂလိပ်စာ/နံပါတ်/`_`/`-`/`.` ဖြင့် 1-40 characters ဖြစ်ရပါမယ်။")
+        await update.message.reply_text("The name must be 1-40 characters and use only letters, numbers, `_`, `-`, or `.`.")
         return PROVIDER_NAME
     context.user_data["provider_draft"]["name"] = name
-    await update.message.reply_text("API key ထည့်ပါ။ ဒီ message ကို သိမ်းပြီးနောက် ဖျက်ပေးပါမယ်။")
+    await update.message.reply_text("Enter the API key. The bot will attempt to delete this message immediately after receiving it.")
     return PROVIDER_KEY
 
 
 async def provider_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     key = (update.message.text or "").strip()
     if not key:
-        await update.message.reply_text("API key အလွတ်မဖြစ်ရပါ။")
+        await update.message.reply_text("The API key cannot be empty.")
         return PROVIDER_KEY
     context.user_data["provider_draft"]["api_key"] = key
     try:
@@ -628,13 +629,13 @@ async def provider_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except TelegramError:
         context.user_data.pop("provider_draft", None)
         await update.message.reply_text(
-            "လုံခြုံရေးအတွက် API key message ကို ဖျက်၍မရသဖြင့် setup ကို ရပ်လိုက်ပါတယ်။ "
-            "Bot ကို private chat တွင် admin အဖြစ်အသုံးပြုကြောင်း စစ်ပြီး ပြန်စပါ။"
+            "Setup was stopped because the API-key message could not be deleted. "
+            "Confirm that you are using the bot in a private admin chat and try again."
         )
         return ConversationHandler.END
     await update.message.reply_text(
-        "Endpoint ထည့်ပါ။ ဥပမာ `https://api.openai.com/v1`\n"
-        "Provider default သုံးမည်ဆို `-` ဟုထည့်ပါ။"
+        "Enter the endpoint, for example `https://api.openai.com/v1`.\n"
+        "Enter `-` to use the provider default endpoint."
     )
     return PROVIDER_ENDPOINT
 
@@ -642,21 +643,21 @@ async def provider_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def provider_add_endpoint(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     endpoint = (update.message.text or "").strip()
     context.user_data["provider_draft"]["base_url"] = "" if endpoint in {"", "-", "default"} else normalize_base_url(endpoint)
-    await update.message.reply_text("Model ID ထည့်ပါ။ ဥပမာ `gpt-5-mini`, `openai/gpt-5-mini`, `llama-3.1-8b-instruct`")
+    await update.message.reply_text("Enter the model ID, for example `gpt-5-mini`, `openai/gpt-5-mini`, or `llama-3.1-8b-instruct`.")
     return PROVIDER_MODEL
 
 
 async def provider_add_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     model = (update.message.text or "").strip()
     if not model:
-        await update.message.reply_text("Model ID အလွတ်မဖြစ်ရပါ။")
+        await update.message.reply_text("The model ID cannot be empty.")
         return PROVIDER_MODEL
     context.user_data["provider_draft"]["model"] = model
     await update.message.reply_text(
-        "Advanced options တစ်ကြောင်းထည့်ပါ:\n"
+        "Enter advanced options on one line:\n"
         "`response_format | tokens_param | timeout_seconds | max_retries | reasoning`\n\n"
-        "ဥပမာ `auto | auto | 60 | 2 |`\n"
-        "မထည့်လိုပါက `auto | auto | 60 | 2 |` ကိုသုံးပါ။"
+        "Example: `auto | auto | 60 | 2 |`\n"
+        "Use that example if you do not need custom options."
     )
     return PROVIDER_OPTIONS
 
@@ -682,37 +683,37 @@ async def provider_add_options(update: Update, context: ContextTypes.DEFAULT_TYP
             raise ProviderPoolError("Provider pool is not available")
         store.upsert(profile)
     except (KeyError, ValueError, ProviderPoolError) as exc:
-        await update.message.reply_text(f"Provider profile မသိမ်းနိုင်ပါ။ {exc}\nပြန်ထည့်ရန် အရင် step မှာ /cancel ပြီး /provider_add ပြန်စပါ။")
+        await update.message.reply_text(f"The provider profile could not be saved: {exc}\nUse /cancel and restart with /provider_add.")
         context.user_data.pop("provider_draft", None)
         return ConversationHandler.END
     context.user_data.pop("provider_draft", None)
     await update.message.reply_text(
-        f"✅ Provider `{profile.name}` သိမ်းပြီးပါပြီ။\n"
-        "API key ကို list တွင် mask လုပ်ထားမည်ဖြစ်ပြီး၊ အသုံးပြုရန် /provider_use "
-        f"{profile.name} ကိုသုံးပါ။"
+        f"✅ Provider `{profile.name}` has been saved.\n"
+        "The API key will be masked in listings. Use /provider_use "
+        f"{profile.name} to activate it."
     )
     return ConversationHandler.END
 
 
 async def provider_add_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("provider_draft", None)
-    await update.message.reply_text("Provider setup ကို ပယ်ဖျက်ပြီးပါပြီ။")
+    await update.message.reply_text("Provider setup has been cancelled.")
     return ConversationHandler.END
 
 
 async def provider_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update):
-        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        await update.message.reply_text("Only bot administrators can use this command.")
         return
     await update.message.reply_text(provider_list_text())
 
 
 async def provider_use_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update):
-        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        await update.message.reply_text("Only bot administrators can use this command.")
         return
     if not context.args:
-        await update.message.reply_text("အသုံးပြုပုံ: /provider_use <profile_name>")
+        await update.message.reply_text("Usage: /provider_use <profile_name>")
         return
     store = provider_store_or_error()
     if store is None:
@@ -721,17 +722,17 @@ async def provider_use_command(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         profile = store.activate(context.args[0].strip())
     except ProviderPoolError as exc:
-        await update.message.reply_text(f"Provider မရွေးနိုင်ပါ။ {exc}")
+        await update.message.reply_text(f"The provider could not be selected: {exc}")
         return
     await update.message.reply_text(f"✅ Active provider: `{profile.name}` | model: `{profile.model}`")
 
 
 async def provider_remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update):
-        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        await update.message.reply_text("Only bot administrators can use this command.")
         return
     if not context.args:
-        await update.message.reply_text("အသုံးပြုပုံ: /provider_remove <profile_name>")
+        await update.message.reply_text("Usage: /provider_remove <profile_name>")
         return
     store = provider_store_or_error()
     if store is None:
@@ -740,14 +741,14 @@ async def provider_remove_command(update: Update, context: ContextTypes.DEFAULT_
     try:
         store.remove(context.args[0].strip())
     except ProviderPoolError as exc:
-        await update.message.reply_text(f"Provider မဖျက်နိုင်ပါ။ {exc}")
+        await update.message.reply_text(f"The provider could not be removed: {exc}")
         return
-    await update.message.reply_text(f"✅ Provider `{context.args[0].strip()}` ဖျက်ပြီးပါပြီ။\n\n{provider_list_text()}")
+    await update.message.reply_text(f"✅ Provider `{context.args[0].strip()}` has been removed.\n\n{provider_list_text()}")
 
 
 async def provider_test_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update):
-        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        await update.message.reply_text("Only bot administrators can use this command.")
         return
     store = provider_store_or_error()
     try:
@@ -755,32 +756,32 @@ async def provider_test_command(update: Update, context: ContextTypes.DEFAULT_TY
         if context.args and profile is None:
             raise ProviderPoolError(f"Provider '{context.args[0].strip()}' was not found")
         selected_name = profile.name if profile else "environment fallback"
-        await update.message.reply_text(f"`{selected_name}` ကို စမ်းသပ်နေပါတယ်…")
+        await update.message.reply_text(f"Testing `{selected_name}`…")
         result = await ContentAgent(provider=profile).agent(
-            "Reply with a short Burmese confirmation that this provider connection is working."
+            "Reply with a short English confirmation that this provider connection is working."
         )
         await update.message.reply_text(
-            f"✅ Provider connection အလုပ်လုပ်ပါတယ်။\n"
+            f"✅ The provider connection is working.\n"
             f"Profile: `{selected_name}`\n"
             f"Response: {str(result.get('answer', 'OK'))[:500]}"
         )
     except (AgentError, ProviderPoolError) as exc:
-        await update.message.reply_text(f"❌ Provider connection မအောင်မြင်ပါ။ {exc}")
+        await update.message.reply_text(f"❌ The provider connection failed: {exc}")
 
 
 async def run_agent_reply(update: Update, prompt: str) -> None:
     if not prompt:
-        await update.message.reply_text("AI agent ကို မေးလိုသော request ထည့်ပါ။")
+        await update.message.reply_text("Enter a request for the AI agent.")
         return
-    await update.message.reply_text("AI agent က စီစဉ်ပြီး ဖြေဆိုနေပါတယ်…")
+    await update.message.reply_text("The AI agent is preparing a response…")
     try:
         result = await ContentAgent().agent(prompt)
-        review = "\n\n⚠️ မှတ်ချက် — source အချက်အလက် မပြည့်စုံသဖြင့် ပြန်စစ်ရန်လိုပါသည်။" if result.get("needs_review") else ""
-        answer = str(result.get("answer", "")).strip() or "ဖြေဆိုချက် မရရှိသေးပါ။"
+        review = "\n\n⚠️ Note: The source information is incomplete and should be reviewed." if result.get("needs_review") else ""
+        answer = str(result.get("answer", "")).strip() or "No answer was returned."
         for part in chunk_text(answer + review):
             await update.message.reply_text(part)
     except AgentError as exc:
-        await update.message.reply_text(f"AI agent မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
+        await update.message.reply_text(f"The AI agent could not complete the request: {exc}")
 
 
 async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -790,7 +791,7 @@ async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if reply_text:
         prompt = f"{prompt}\n\nREFERENCE CONTENT:\n{reply_text}".strip() if prompt else reply_text
     if not prompt:
-        await update.message.reply_text("AI agent ကို မေးလိုသော request ထည့်ပါ သို့မဟုတ် message တစ်ခုကို reply လုပ်ပြီး /agent ကိုသုံးပါ။")
+        await update.message.reply_text("Enter a request, or reply to a message and use /agent.")
         return
     await run_agent_reply(update, prompt)
 
@@ -803,56 +804,56 @@ async def freeform_agent_message(update: Update, context: ContextTypes.DEFAULT_T
 async def post_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     source = command_payload(update, context)
     if not source:
-        await update.message.reply_text("ရေးသားရန် source text ထည့်ပါ သို့မဟုတ် message တစ်ခုကို reply လုပ်ပြီး /post ကိုသုံးပါ။")
+        await update.message.reply_text("Enter source text, or reply to a message and use /post.")
         return
-    await update.message.reply_text("Content ကို စီစဉ်နေပါတယ်…")
+    await update.message.reply_text("Preparing the content…")
     try:
         result = await ContentAgent().create_post(source)
-        review = "\n\n⚠️ မှတ်ချက် — source အချက်အလက် မပြည့်စုံသဖြင့် publish မလုပ်မီ ပြန်စစ်ပါ။" if result.get("needs_review") else ""
+        review = "\n\n⚠️ Note: The source information is incomplete; review it before publishing." if result.get("needs_review") else ""
         await update.message.reply_text(result["post"][:4000] + review)
     except AgentError as exc:
-        await update.message.reply_text(f"မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
+        await update.message.reply_text(f"The request could not be completed: {exc}")
 
 
 async def curate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     source = command_payload(update, context)
     if not source:
-        await update.message.reply_text("စီစစ်ရန် content ထည့်ပါ သို့မဟုတ် message တစ်ခုကို reply လုပ်ပြီး /curate ကိုသုံးပါ။")
+        await update.message.reply_text("Enter content to curate, or reply to a message and use /curate.")
         return
     target = {
-        "label": "သတ်မှတ်မထားသော target",
-        "description": "Target မသတ်မှတ်ရသေးပါ။ Category နှင့် context ကိုသာ အကြံပြုပါ။",
+        "label": "Unspecified target",
+        "description": "No target has been specified; suggest only a category and context.",
         "allowed_categories": [],
     }
     try:
         result = await ContentAgent().curate(source, target)
-        status = "သင့်လျော်နိုင်သည်" if result.get("should_forward") else "မသေချာသေးပါ / မပို့သင့်ပါ"
+        status = "Potentially relevant" if result.get("should_forward") else "Uncertain / do not forward"
         await update.message.reply_text(
-            f"📌 Category: {result.get('category', 'မသတ်မှတ်နိုင်')}\n"
-            f"📊 ဆုံးဖြတ်ချက်: {status}\n\n"
+            f"📌 Category: {result.get('category', 'Unknown')}\n"
+            f"📊 Decision: {status}\n\n"
             f"{result.get('intro', '')}\n\n"
-            f"အကြောင်းပြချက်: {result.get('reason', '')}"
+            f"Reason: {result.get('reason', '')}"
         )
     except AgentError as exc:
-        await update.message.reply_text(f"မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
+        await update.message.reply_text(f"The request could not be completed: {exc}")
 
 
 async def groupscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not group_scan_allowed(update):
-        await update.message.reply_text("ဒီ chat ကို GroupScan အသုံးပြုခွင့် allowlist ထဲတွင် မထည့်ရသေးပါ။")
+        await update.message.reply_text("This chat is not included in the GroupScan allowlist.")
         return
     try:
         raw = await group_scan_payload(update, context)
     except GroupScanInputError as exc:
-        await update.message.reply_text(f"GroupScan input မမှန်ပါ။ {exc}")
+        await update.message.reply_text(f"Invalid GroupScan input: {exc}")
         return
     if not raw:
         await update.message.reply_text(
-            "အသုံးပြုပုံ:\n"
+            "Usage:\n"
             "/groupscan AI tools\n"
-            "AI Myanmar | AI tool များဆွေးနွေးခြင်း | 12K\n"
+            "AI Myanmar | AI tools discussion | 12K\n"
             "Marketing MM | Digital marketing | 850\n\n"
-            "သို့မဟုတ် group list `.txt`, `.csv`, `.json` ကို upload လုပ်ပြီး reply ဖြင့် /groupscan <niche> ကိုသုံးပါ။"
+            "Alternatively, upload a `.txt`, `.csv`, or `.json` group list and reply to it with /groupscan <niche>."
         )
         return
 
@@ -860,16 +861,16 @@ async def groupscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         groups = parse_group_records(group_text)
     except GroupScanInputError as exc:
-        await update.message.reply_text(f"GroupScan input မမှန်ပါ။ {exc}")
+        await update.message.reply_text(f"Invalid GroupScan input: {exc}")
         return
     if not groups:
         await update.message.reply_text(
-            "Group record မတွေ့ပါ။ `အမည် | description | member count`၊ CSV header သို့မဟုတ် JSON groups format ကိုသုံးပါ။"
+            "No group records were found. Use `Group Name | description | member count`, a CSV header, or a JSON groups format."
         )
         return
 
     status_msg = await update.message.reply_text(
-        f"{len(groups)} ခုကို `{niche or 'သတ်မှတ်မထားသော niche'}` အတွက် စစ်နေပါတယ်…"
+        f"Evaluating {len(groups)} group(s) for `{niche or 'unspecified niche'}`…"
     )
     try:
         result = await ContentAgent().scout(groups, niche)
@@ -878,7 +879,7 @@ async def groupscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         for part in chunk_text(report):
             await update.message.reply_text(part)
     except AgentError as exc:
-        await status_msg.edit_text(f"မလုပ်ဆောင်နိုင်သေးပါ။ {exc}")
+        await status_msg.edit_text(f"The GroupScan request could not be completed: {exc}")
     except TelegramError:
         logger.exception("Could not update GroupScan status message")
 
@@ -893,60 +894,60 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     await update.message.reply_text(
         f"📌 Chat ID: `{chat.id}`\n\n"
-        "ဒီ ID ကို `GROUPSCAN_ALLOWED_CHAT_IDS` ထဲထည့်ပြီး GroupScan ကို သတ်မှတ်ထားတဲ့ chat များတွင်သာ ခွင့်ပြုနိုင်ပါတယ်။"
+        "Add this ID to `GROUPSCAN_ALLOWED_CHAT_IDS` to restrict GroupScan to approved chats."
     )
 
 
 async def targets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update):
-        await update.message.reply_text("ဒီ command ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        await update.message.reply_text("Only bot administrators can use this command.")
         return
     if not TARGETS:
-        await update.message.reply_text("TARGETS_JSON မသတ်မှတ်ရသေးပါ။")
+        await update.message.reply_text("TARGETS_JSON is not configured.")
         return
-    lines = ["ခွင့်ပြုထားသော target များ:"]
+    lines = ["Allowed forwarding targets:"]
     for target in TARGETS:
-        categories = ", ".join(target["allowed_categories"]) or "မသတ်မှတ်ထား"
+        categories = ", ".join(target["allowed_categories"]) or "not specified"
         lines.append(f"• {target['label']} ({target['chat_id']}) — {categories}\n  {target['description']}")
     await update.message.reply_text("\n".join(lines))
 
 
 async def forward_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update):
-        await update.message.reply_text("Smart forwarding ကို bot admin များသာ အသုံးပြုနိုင်ပါတယ်။")
+        await update.message.reply_text("Only bot administrators can use smart forwarding.")
         return
     if not update.message.reply_to_message:
-        await update.message.reply_text("Forward လုပ်မည့် source message ကို reply လုပ်ပြီး `/forward <target_chat_id>` ကိုသုံးပါ။")
+        await update.message.reply_text("Reply to the source message and use `/forward <target_chat_id>`.")
         return
     if not context.args:
-        await update.message.reply_text("Target chat ID ထည့်ပါ။ `/targets` ဖြင့် ခွင့်ပြုထားသော target များကြည့်နိုင်ပါတယ်။")
+        await update.message.reply_text("Enter a target chat ID. Use `/targets` to see allowed targets.")
         return
     try:
         target_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text("Target chat ID သည် number ဖြစ်ရပါမယ်။")
+        await update.message.reply_text("The target chat ID must be a number.")
         return
     target = target_for(target_id)
     if not target:
-        await update.message.reply_text("ဒီ target ကို allowlist ထဲတွင် မတွေ့ပါ။")
+        await update.message.reply_text("That target is not in the allowlist.")
         return
     source = source_from_message(update.message.reply_to_message)
     if not source:
-        await update.message.reply_text("Source message တွင် text သို့မဟုတ် caption မရှိသဖြင့် safe curation မလုပ်နိုင်ပါ။")
+        await update.message.reply_text("The source message has no text or caption, so safe curation cannot be performed.")
         return
 
-    await update.message.reply_text("Target relevance ကို စစ်ပြီး forward လုပ်နေပါတယ်…")
+    await update.message.reply_text("Checking target relevance before forwarding…")
     try:
         decision = await ContentAgent().curate(source, target)
         if not decision.get("should_forward") or decision.get("needs_review"):
             await update.message.reply_text(
-                "မပို့သေးပါ။\n"
-                f"အကြောင်းပြချက်: {decision.get('reason', 'မသေချာသော relevance')}"
+                "Not forwarded.\n"
+                f"Reason: {decision.get('reason', 'Relevance is uncertain.')}"
             )
             return
         intro = str(decision.get("intro", "")).strip()
         if not intro:
-            await update.message.reply_text("Context intro မရသဖြင့် raw forward မလုပ်ပါ။")
+            await update.message.reply_text("No context intro was generated, so the raw message was not forwarded.")
             return
         await context.bot.send_message(chat_id=target_id, text=intro)
         await context.bot.forward_message(
@@ -954,10 +955,10 @@ async def forward_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             from_chat_id=update.message.reply_to_message.chat_id,
             message_id=update.message.reply_to_message.message_id,
         )
-        await update.message.reply_text(f"✅ {target['label']} သို့ context intro ဖြင့် forward လုပ်ပြီးပါပြီ။")
+        await update.message.reply_text(f"✅ Forwarded to {target['label']} with a context intro.")
     except (AgentError, TelegramError) as exc:
         logger.exception("Forwarding failed")
-        await update.message.reply_text(f"Forward မအောင်မြင်ပါ။ {exc}")
+        await update.message.reply_text(f"Forwarding failed: {exc}")
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -967,13 +968,13 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
-            BotCommand("start", "စတင်ရန်"),
-            BotCommand("agent", "AI agent ကိုမေးရန်"),
-            BotCommand("post", "Telegram post ရေးရန်"),
+            BotCommand("start", "Start the bot"),
+            BotCommand("agent", "Ask the AI agent"),
+            BotCommand("post", "Create a Telegram post"),
             BotCommand("curate", "Content curation"),
             BotCommand("groupscan", "GroupScan scouting"),
             BotCommand("scout", "GroupScan alias"),
-            BotCommand("id", "လက်ရှိ chat ID"),
+            BotCommand("id", "Show the current chat ID"),
             BotCommand("forward", "Smart forwarding"),
             BotCommand("targets", "Target list"),
             BotCommand("provider_list", "API provider list"),
@@ -981,7 +982,7 @@ async def post_init(application: Application) -> None:
             BotCommand("provider_use", "Select API provider"),
             BotCommand("provider_test", "Test API provider"),
             BotCommand("provider_remove", "Remove API provider"),
-            BotCommand("help", "အကူအညီ"),
+            BotCommand("help", "Show help"),
         ]
     )
 
