@@ -13,7 +13,13 @@ The model is instructed not to invent facts, news, statistics, engagement, or gr
 | Workflow | Command | Behavior |
 |---|---|---|
 | General AI agent | `/agent <request>` | Uses the configured Telegram strategist identity to answer content, campaign, curation, and growth requests in English by default. |
-| Content creation | `/post <source>` | Converts source material into an English Telegram post with a hook, short sections, restrained emojis, and a CTA. |
+| Content creation | `/post <source>` | Converts source material into an English Telegram post with a hook, short sections, restrained emojis, and a CTA, then saves the result as a database-backed draft. |
+| Draft workflow | `/draft_list`, `/preview`, `/draft_edit`, `/approve` | Review, edit, and approve generated drafts before publishing. |
+| Scheduled publishing | `/publish`, `/schedule` | Publish or schedule approved drafts to explicitly allowlisted targets. Scheduled jobs are processed by the bot’s background worker. |
+| Multi-channel publishing | `/publish_multi`, `/batch_publish` | Publish one approved draft to several allowlisted channels, or publish several approved drafts to one target. |
+| Publishing audit | `/audit` | Shows delivery attempts, retries, success/failure states, target IDs, and batch IDs for the current user. |
+| Rich media drafts | `/media_attach`, `/media_clear` | Attach Telegram photos, videos, or albums to drafts; store Telegram file IDs for later publishing. |
+| Post controls | `/buttons_set`, `/preview_set`, `/watermark_set` | Configure inline URL buttons, link-preview behavior, and image watermark text. |
 | Content curation | `/curate <content>` | Classifies the content and drafts a 1–2 sentence context intro without sending anything. |
 | GroupScan scouting | `/groupscan <niche>` or `/scout <niche>` | Scores niche fit, flags spam or irrelevance, and returns `target`, `review`, or `exclude`. Accepts pipe-delimited text, CSV, JSON, or a replied UTF-8 text file. |
 | Chat ID helper | `/id` | Shows the current chat ID so an administrator can configure the GroupScan chat allowlist. |
@@ -42,6 +48,8 @@ Copy `.env.example` to `.env` for local development, or add the same values as e
 | `GROUPSCAN_ALLOWED_CHAT_IDS` | No | Comma-separated chat IDs where `/groupscan` is allowed. Leave blank to allow any chat. |
 | `GROUPSCAN_MAX_GROUPS` | No | Maximum groups accepted per scan; defaults to `50`. |
 | `GROUPSCAN_MAX_FILE_BYTES` | No | Maximum UTF-8 input-file size; defaults to `1000000` bytes. |
+| `PUBLISH_MAX_RETRIES` | No | Additional Telegram delivery attempts after the first failure; defaults to `2`, capped at `5`. |
+| `PUBLISH_RETRY_DELAY_SECONDS` | No | Base delay between delivery retries; defaults to `5` seconds. |
 | `DATABASE_URL` | No | Database URL; defaults to `sqlite:///bot.db`. Use a PostgreSQL URL in production when desired. |
 | `API_KEY_ENCRYPTION_KEY` | No | Fernet key used to encrypt API keys in the database. If blank, a stable key is derived from `BOT_TOKEN`; preserve it after deployment. |
 | `PROVIDER_STORE_KEY` | No | Legacy alias accepted for `API_KEY_ENCRYPTION_KEY`. |
@@ -94,6 +102,75 @@ Add the administrator’s Telegram user ID to `ADMIN_IDS`, start the bot, and op
 Use `/provider_list` to see masked keys and redacted endpoints, `/provider_use <name>` to select the active profile, `/provider_test [name]` to verify a profile, and `/provider_remove <name>` to delete one. Profiles are isolated by Telegram user ID, so one user cannot activate or remove another user’s profile. The selected profile is used automatically by `/agent`, `/post`, `/curate`, `/groupscan`, and `/forward`.
 
 Use `/preferences` to view saved preferences and `/prefs_set <key> <value>` to save them. Supported keys are `language`, `default_niche`, and `style`. The current English build accepts `language=English`; `default_niche` is used when `/groupscan` is called without an explicit niche.
+
+### Draft, approval, and scheduling workflow
+
+Use `/post <source>` to generate a post and save it as a private draft owned by the requesting Telegram user. Review it with `/preview <draft_id>` or `/draft_list`. Edit it with `/draft_edit <draft_id> <new post text>`. When the source is verified, approve it with `/approve <draft_id>`.
+
+Publishing commands are administrator-only and require the destination to exist in `TARGETS_JSON`:
+
+```text
+/publish <draft_id> <target_chat_id>
+/schedule <draft_id> <target_chat_id> 2026-08-20T09:00:00Z
+```
+
+Scheduled times must be ISO-8601 UTC values. The bot checks due drafts in a background worker every 30 seconds, claims each job before sending it, records the Telegram message ID on success, and marks the draft as `FAILED` with an error message if delivery fails. Only `APPROVED` drafts can be published or scheduled, and drafts marked for source review cannot be approved until the source is corrected.
+
+### Channel profiles, templates, and recurring posts
+
+Channel profiles store a label, IANA timezone, and optional signature for each user and channel. Administrators can configure one with:
+
+```text
+/channel_add -1001234567890 Asia/Yangon AI Myanmar || Join us: @ai_mm
+/channel_list
+/channel_remove -1001234567890
+```
+
+Templates are user-scoped and can be reused to generate drafts:
+
+```text
+/template_add announcement || Hook: {{source}} || announcement || Read more
+/template_list
+/template_post announcement New AI tools released today
+/template_remove announcement
+```
+
+Recurring posts use a minimum interval of 60 minutes and can use a channel profile’s timezone when the start time has no explicit UTC offset:
+
+```text
+/repeat <draft_id> <target_chat_id> 1440 2026-08-20T09:00:00
+/repeat <draft_id> <target_chat_id> 10080 2026-08-20T09:00:00 2026-12-31T23:59:00
+/repeat_list
+/repeat_remove <recurring_id>
+```
+
+Recurring jobs are claimed before delivery, publish the approved or previously published draft, append the channel signature when configured, and calculate the next run in UTC. A failed delivery is retained with an error message and retried after five minutes unless the configured end time has passed.
+
+### Multi-channel, batch, retry, and audit workflow
+
+Use `/publish_multi` to send one approved draft to several allowlisted targets, or `/batch_publish` to send several approved drafts to one target:
+
+```text
+/publish_multi <draft_id> -1001234567890,-1009876543210
+/batch_publish <draft_id_1,draft_id_2> -1001234567890
+/audit
+```
+
+Every delivery attempt is recorded in the database with the action, status, draft ID, target chat ID, batch ID, attempt number, and a redacted delivery detail. Telegram delivery errors are retried according to `PUBLISH_MAX_RETRIES` and `PUBLISH_RETRY_DELAY_SECONDS`. Partial batch failures are reported instead of being silently treated as a full success.
+
+### Rich media, buttons, previews, and watermarks
+
+Reply to a Telegram photo, video, or image document and attach it to a draft with `/media_attach <draft_id>`. Multiple photos are published as an album; a single photo or video is published as a media post. Use `/media_clear <draft_id>` to remove attached media.
+
+Configure post controls with the following commands:
+
+```text
+/buttons_set <draft_id> Read more | https://example.com || Join | https://t.me/example
+/preview_set <draft_id> off
+/watermark_set <draft_id> AI Myanmar
+```
+
+Photo albums are sent as Telegram media groups. Inline URL buttons are sent below single-media or text posts. Link previews can be disabled for text posts. Image watermarks are rendered before publishing; video watermarks are deliberately rejected because this build does not modify video bytes. Media file IDs are stored in the database so scheduled and recurring posts can reuse the attachments without re-uploading them.
 
 If you are upgrading from the older encrypted `provider_pool.enc` format, stop the bot and run the one-time migration utility. Use the Telegram user ID that owned the old global provider pool:
 

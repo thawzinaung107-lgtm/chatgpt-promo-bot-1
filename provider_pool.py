@@ -20,7 +20,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint, create_engine, select
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint, create_engine, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -117,6 +117,92 @@ class UserPreferenceRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ChannelProfileRecord(Base):
+    __tablename__ = "channel_profiles"
+    __table_args__ = (UniqueConstraint("owner_user_id", "chat_id", name="uq_channel_owner_chat"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    timezone_name: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
+    signature: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TemplateRecord(Base):
+    __tablename__ = "content_templates"
+    __table_args__ = (UniqueConstraint("owner_user_id", "name", name="uq_template_owner_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    cta: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AuditLogRecord(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    draft_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    target_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    batch_id: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class RecurringPostRecord(Base):
+    __tablename__ = "recurring_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    draft_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    channel_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    until_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DraftRecord(Base):
+    __tablename__ = "content_drafts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    post_text: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    cta: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_facts_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", index=True)
+    channel_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    media_type: Mapped[str] = mapped_column(String(24), nullable=False, default="text")
+    media_file_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    buttons_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    link_preview_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    watermark_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ProviderPoolStore:
     """Persistent provider profiles and user preferences for SQLite or PostgreSQL."""
 
@@ -139,6 +225,7 @@ class ProviderPoolStore:
         try:
             self.engine = create_engine(normalized_url, **engine_kwargs)
             Base.metadata.create_all(self.engine)
+            self._ensure_draft_media_columns()
             self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
         except SQLAlchemyError as exc:
             raise ProviderPoolError(f"Database initialization failed: {exc}") from exc
@@ -313,6 +400,355 @@ class ProviderPoolStore:
                 if remaining:
                     remaining[0].is_active = True
                     remaining[0].updated_at = self._now()
+
+    def _ensure_draft_media_columns(self) -> None:
+        columns = {column["name"] for column in inspect(self.engine).get_columns("content_drafts")}
+        definitions = {
+            "media_type": "VARCHAR(24) NOT NULL DEFAULT 'text'",
+            "media_file_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            "buttons_json": "TEXT NOT NULL DEFAULT '[]'",
+            "link_preview_disabled": "BOOLEAN NOT NULL DEFAULT FALSE",
+            "watermark_text": "TEXT NOT NULL DEFAULT ''",
+        }
+        with self.engine.begin() as connection:
+            for column_name, definition in definitions.items():
+                if column_name not in columns:
+                    connection.execute(text(f"ALTER TABLE content_drafts ADD COLUMN {column_name} {definition}"))
+
+    @staticmethod
+    def _channel_dict(record: ChannelProfileRecord) -> dict[str, Any]:
+        return {
+            "id": record.id,
+            "owner_user_id": record.owner_user_id,
+            "chat_id": record.chat_id,
+            "label": record.label,
+            "timezone": record.timezone_name,
+            "signature": record.signature,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+
+    def upsert_channel_profile(self, user_id: int, chat_id: int, label: str, timezone_name: str, signature: str) -> dict[str, Any]:
+        owner = int(user_id)
+        now = self._now()
+        with self.Session.begin() as session:
+            record = session.scalars(select(ChannelProfileRecord).where(ChannelProfileRecord.owner_user_id == owner, ChannelProfileRecord.chat_id == int(chat_id))).first()
+            if record is None:
+                record = ChannelProfileRecord(owner_user_id=owner, chat_id=int(chat_id), created_at=now, updated_at=now)
+                session.add(record)
+            record.label = label.strip()[:255]
+            record.timezone_name = timezone_name.strip() or "UTC"
+            record.signature = signature.strip()[:2000]
+            record.updated_at = now
+            session.flush()
+            return self._channel_dict(record)
+
+    def list_channel_profiles(self, user_id: int) -> list[dict[str, Any]]:
+        with self.Session() as session:
+            records = session.scalars(select(ChannelProfileRecord).where(ChannelProfileRecord.owner_user_id == int(user_id)).order_by(ChannelProfileRecord.chat_id)).all()
+            return [self._channel_dict(record) for record in records]
+
+    def get_channel_profile(self, user_id: int, chat_id: int) -> dict[str, Any] | None:
+        with self.Session() as session:
+            record = session.scalars(select(ChannelProfileRecord).where(ChannelProfileRecord.owner_user_id == int(user_id), ChannelProfileRecord.chat_id == int(chat_id))).first()
+            return self._channel_dict(record) if record else None
+
+    def remove_channel_profile(self, user_id: int, chat_id: int) -> None:
+        with self.Session.begin() as session:
+            record = session.scalars(select(ChannelProfileRecord).where(ChannelProfileRecord.owner_user_id == int(user_id), ChannelProfileRecord.chat_id == int(chat_id))).first()
+            if record is None:
+                raise ProviderPoolError("Channel profile was not found")
+            session.delete(record)
+
+    @staticmethod
+    def _template_dict(record: TemplateRecord) -> dict[str, Any]:
+        return {
+            "id": record.id,
+            "owner_user_id": record.owner_user_id,
+            "name": record.name,
+            "body": record.body,
+            "category": record.category,
+            "cta": record.cta,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+
+    def upsert_template(self, user_id: int, name: str, body: str, category: str = "", cta: str = "") -> dict[str, Any]:
+        if not name.strip() or not body.strip():
+            raise ProviderPoolError("Template name and body cannot be empty")
+        owner = int(user_id)
+        now = self._now()
+        with self.Session.begin() as session:
+            record = session.scalars(select(TemplateRecord).where(TemplateRecord.owner_user_id == owner, TemplateRecord.name == name.strip())).first()
+            if record is None:
+                record = TemplateRecord(owner_user_id=owner, name=name.strip()[:80], body=body.strip(), created_at=now, updated_at=now)
+                session.add(record)
+            record.body = body.strip()
+            record.category = category.strip()[:100]
+            record.cta = cta.strip()
+            record.updated_at = now
+            session.flush()
+            return self._template_dict(record)
+
+    def list_templates(self, user_id: int) -> list[dict[str, Any]]:
+        with self.Session() as session:
+            records = session.scalars(select(TemplateRecord).where(TemplateRecord.owner_user_id == int(user_id)).order_by(TemplateRecord.name)).all()
+            return [self._template_dict(record) for record in records]
+
+    def get_template(self, user_id: int, name: str) -> dict[str, Any] | None:
+        with self.Session() as session:
+            record = session.scalars(select(TemplateRecord).where(TemplateRecord.owner_user_id == int(user_id), TemplateRecord.name == name)).first()
+            return self._template_dict(record) if record else None
+
+    def remove_template(self, user_id: int, name: str) -> None:
+        with self.Session.begin() as session:
+            record = session.scalars(select(TemplateRecord).where(TemplateRecord.owner_user_id == int(user_id), TemplateRecord.name == name)).first()
+            if record is None:
+                raise ProviderPoolError("Template was not found")
+            session.delete(record)
+
+    def record_audit(self, user_id: int, action: str, status: str, draft_id: int | None = None, target_chat_id: int | None = None, batch_id: str = "", attempt: int = 1, detail: str = "") -> dict[str, Any]:
+        record = AuditLogRecord(owner_user_id=int(user_id), action=action[:64], status=status[:24], draft_id=draft_id, target_chat_id=target_chat_id, batch_id=batch_id[:80], attempt=int(attempt), detail=detail[:2000], created_at=self._now())
+        with self.Session.begin() as session:
+            session.add(record)
+            session.flush()
+            return {
+                "id": record.id,
+                "owner_user_id": record.owner_user_id,
+                "action": record.action,
+                "status": record.status,
+                "draft_id": record.draft_id,
+                "target_chat_id": record.target_chat_id,
+                "batch_id": record.batch_id,
+                "attempt": record.attempt,
+                "detail": record.detail,
+                "created_at": record.created_at,
+            }
+
+    def list_audit_logs(self, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        with self.Session() as session:
+            records = session.scalars(select(AuditLogRecord).where(AuditLogRecord.owner_user_id == int(user_id)).order_by(AuditLogRecord.created_at.desc()).limit(limit)).all()
+            return [
+                {
+                    "id": record.id,
+                    "action": record.action,
+                    "status": record.status,
+                    "draft_id": record.draft_id,
+                    "target_chat_id": record.target_chat_id,
+                    "batch_id": record.batch_id,
+                    "attempt": record.attempt,
+                    "detail": record.detail,
+                    "created_at": record.created_at,
+                }
+                for record in records
+            ]
+
+    @staticmethod
+    def _recurring_dict(record: RecurringPostRecord) -> dict[str, Any]:
+        return {
+            "id": record.id,
+            "owner_user_id": record.owner_user_id,
+            "draft_id": record.draft_id,
+            "channel_chat_id": record.channel_chat_id,
+            "interval_minutes": record.interval_minutes,
+            "next_run_at": record.next_run_at,
+            "until_at": record.until_at,
+            "active": record.active,
+            "last_run_at": record.last_run_at,
+            "last_error": record.last_error,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+
+    def create_recurring(self, user_id: int, draft_id: int, channel_chat_id: int, interval_minutes: int, next_run_at: datetime, until_at: datetime | None = None) -> dict[str, Any]:
+        if interval_minutes < 60:
+            raise ProviderPoolError("Recurring interval must be at least 60 minutes")
+        now = self._now()
+        record = RecurringPostRecord(owner_user_id=int(user_id), draft_id=int(draft_id), channel_chat_id=int(channel_chat_id), interval_minutes=int(interval_minutes), next_run_at=next_run_at, until_at=until_at, active=True, created_at=now, updated_at=now)
+        with self.Session.begin() as session:
+            session.add(record)
+            session.flush()
+            return self._recurring_dict(record)
+
+    def list_recurring(self, user_id: int, active_only: bool = False) -> list[dict[str, Any]]:
+        with self.Session() as session:
+            query = select(RecurringPostRecord).where(RecurringPostRecord.owner_user_id == int(user_id)).order_by(RecurringPostRecord.next_run_at)
+            if active_only:
+                query = query.where(RecurringPostRecord.active.is_(True))
+            return [self._recurring_dict(record) for record in session.scalars(query).all()]
+
+    def claim_due_recurring(self, now: datetime | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        current = now or self._now()
+        with self.Session.begin() as session:
+            query = select(RecurringPostRecord).where(RecurringPostRecord.active.is_(True), RecurringPostRecord.next_run_at <= current).order_by(RecurringPostRecord.next_run_at).limit(limit)
+            records = session.scalars(query).all()
+            for record in records:
+                record.active = False
+                record.updated_at = current
+            return [self._recurring_dict(record) for record in records]
+
+    def complete_recurring(self, recurring_id: int, next_run_at: datetime | None, last_run_at: datetime, last_error: str = "") -> dict[str, Any]:
+        with self.Session.begin() as session:
+            record = session.get(RecurringPostRecord, int(recurring_id))
+            if record is None:
+                raise ProviderPoolError("Recurring post was not found")
+            record.last_run_at = last_run_at
+            record.last_error = last_error[:1000]
+            record.next_run_at = next_run_at or record.next_run_at
+            record.active = next_run_at is not None
+            record.updated_at = self._now()
+            return self._recurring_dict(record)
+
+    def remove_recurring(self, user_id: int, recurring_id: int) -> None:
+        with self.Session.begin() as session:
+            record = session.scalars(select(RecurringPostRecord).where(RecurringPostRecord.id == int(recurring_id), RecurringPostRecord.owner_user_id == int(user_id))).first()
+            if record is None:
+                raise ProviderPoolError("Recurring post was not found")
+            session.delete(record)
+
+    @staticmethod
+    def _draft_dict(record: DraftRecord) -> dict[str, Any]:
+        try:
+            source_facts = json.loads(record.source_facts_json or "[]")
+        except json.JSONDecodeError:
+            source_facts = []
+        try:
+            media_file_ids = json.loads(record.media_file_ids_json or "[]")
+        except json.JSONDecodeError:
+            media_file_ids = []
+        try:
+            buttons = json.loads(record.buttons_json or "[]")
+        except json.JSONDecodeError:
+            buttons = []
+        return {
+            "id": record.id,
+            "owner_user_id": record.owner_user_id,
+            "source_text": record.source_text,
+            "post_text": record.post_text,
+            "category": record.category,
+            "cta": record.cta,
+            "source_facts": source_facts,
+            "needs_review": record.needs_review,
+            "status": record.status,
+            "channel_chat_id": record.channel_chat_id,
+            "scheduled_at": record.scheduled_at,
+            "published_at": record.published_at,
+            "published_message_id": record.published_message_id,
+            "last_error": record.last_error,
+            "media_type": record.media_type,
+            "media_file_ids": media_file_ids,
+            "buttons": buttons,
+            "link_preview_disabled": record.link_preview_disabled,
+            "watermark_text": record.watermark_text,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+
+    def create_draft(self, user_id: int, source_text: str, result: dict[str, Any], media: dict[str, Any] | None = None) -> dict[str, Any]:
+        post_text = str(result.get("post", "")).strip()
+        if not post_text:
+            raise ProviderPoolError("A draft cannot be created without post text")
+        now = self._now()
+        media = media or {}
+        record = DraftRecord(
+            owner_user_id=int(user_id),
+            source_text=source_text,
+            post_text=post_text,
+            category=str(result.get("category", "")),
+            cta=str(result.get("cta", "")),
+            source_facts_json=json.dumps(result.get("source_facts", []), ensure_ascii=False),
+            needs_review=bool(result.get("needs_review", False)),
+            media_type=str(media.get("media_type", "text")),
+            media_file_ids_json=json.dumps([str(value) for value in media.get("media_file_ids", [])], ensure_ascii=False),
+            buttons_json=json.dumps(media.get("buttons", []), ensure_ascii=False),
+            link_preview_disabled=bool(media.get("link_preview_disabled", False)),
+            watermark_text=str(media.get("watermark_text", ""))[:500],
+            status="draft",
+            created_at=now,
+            updated_at=now,
+        )
+        with self.Session.begin() as session:
+            session.add(record)
+            session.flush()
+            return self._draft_dict(record)
+
+    def update_draft_media(self, user_id: int, draft_id: int, media_type: str | None = None, media_file_ids: list[str] | None = None, buttons: list[dict[str, str]] | None = None, link_preview_disabled: bool | None = None, watermark_text: str | None = None) -> dict[str, Any]:
+        with self.Session.begin() as session:
+            record = session.scalar(select(DraftRecord).where(DraftRecord.id == int(draft_id), DraftRecord.owner_user_id == int(user_id)))
+            if record is None:
+                raise ProviderPoolError("Draft was not found")
+            if media_type is not None:
+                record.media_type = media_type
+            if media_file_ids is not None:
+                record.media_file_ids_json = json.dumps([str(value) for value in media_file_ids], ensure_ascii=False)
+            if buttons is not None:
+                record.buttons_json = json.dumps(buttons, ensure_ascii=False)
+            if link_preview_disabled is not None:
+                record.link_preview_disabled = bool(link_preview_disabled)
+            if watermark_text is not None:
+                record.watermark_text = watermark_text[:500]
+            record.updated_at = self._now()
+            return self._draft_dict(record)
+
+    def get_draft(self, user_id: int, draft_id: int) -> dict[str, Any] | None:
+        with self.Session() as session:
+            record = session.scalar(
+                select(DraftRecord).where(
+                    DraftRecord.id == int(draft_id),
+                    DraftRecord.owner_user_id == int(user_id),
+                )
+            )
+            return self._draft_dict(record) if record else None
+
+    def list_drafts(self, user_id: int, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        with self.Session() as session:
+            query = select(DraftRecord).where(DraftRecord.owner_user_id == int(user_id)).order_by(DraftRecord.updated_at.desc()).limit(limit)
+            if status:
+                query = query.where(DraftRecord.status == status)
+            return [self._draft_dict(record) for record in session.scalars(query).all()]
+
+    def update_draft(self, user_id: int, draft_id: int, **changes: Any) -> dict[str, Any]:
+        allowed = {"post_text", "status", "channel_chat_id", "scheduled_at", "last_error", "published_at", "published_message_id"}
+        unknown = set(changes) - allowed
+        if unknown:
+            raise ProviderPoolError(f"Unsupported draft fields: {', '.join(sorted(unknown))}")
+        with self.Session.begin() as session:
+            record = session.scalar(
+                select(DraftRecord).where(
+                    DraftRecord.id == int(draft_id),
+                    DraftRecord.owner_user_id == int(user_id),
+                )
+            )
+            if record is None:
+                raise ProviderPoolError(f"Draft {draft_id} was not found")
+            for key, value in changes.items():
+                setattr(record, key, value)
+            record.updated_at = self._now()
+            return self._draft_dict(record)
+
+    def claim_due_drafts(self, now: datetime | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        current = now or self._now()
+        with self.Session.begin() as session:
+            query = (
+                select(DraftRecord)
+                .where(
+                    DraftRecord.status == "scheduled",
+                    DraftRecord.scheduled_at.is_not(None),
+                    DraftRecord.scheduled_at <= current,
+                )
+                .order_by(DraftRecord.scheduled_at)
+                .limit(limit)
+            )
+            records = session.scalars(query).all()
+            for record in records:
+                record.status = "publishing"
+                record.updated_at = current
+            return [self._draft_dict(record) for record in records]
+
+    def get_draft_by_id(self, draft_id: int) -> dict[str, Any] | None:
+        with self.Session() as session:
+            record = session.get(DraftRecord, int(draft_id))
+            return self._draft_dict(record) if record else None
 
     def get_preferences(self, user_id: int) -> dict[str, str]:
         owner = int(user_id)
