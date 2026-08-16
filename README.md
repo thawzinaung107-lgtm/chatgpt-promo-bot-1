@@ -2,6 +2,10 @@
 
 An English-first Telegram AI agent for content creation, smart curation, protected forwarding, and Telegram group scouting. The bot is designed around the supplied identity: it writes engaging mobile-friendly posts, adds context before forwarding, and evaluates candidate groups using only their supplied name, description, and member count.
 
+## Documentation
+
+For the complete end-to-end setup, user workflow, administrator operations, command reference, database and provider management, publishing, scheduling, GroupScan, media, troubleshooting, and security guidance, read the [Bot User and Administrator Manual](BOT_USER_ADMIN_MANUAL.md). The dedicated [GroupScan Usage Guide](GROUPSCAN_USAGE_GUIDE.md) remains available for GroupScan-specific examples.
+
 ## Safety boundary
 
 This repository now contains only the content-strategy bot. The previous unrelated promo-scanning and token-handling logic has been removed. The bot does not request, store, decode, validate, or transmit access tokens or private account credentials.

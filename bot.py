@@ -695,7 +695,18 @@ def usage_text() -> str:
     return (
         "Available commands\n\n"
         "/agent <request> — Ask the AI Content Strategist a general request\n"
-        "/post <source> — Turn source material into a Telegram post\n"
+        "/post <source> — Turn source material into a Telegram post and save a draft\n"
+        "/draft_list [status] — List your drafts\n"
+        "/preview <draft_id> — Preview a draft\n"
+        "/draft_edit <draft_id> <new text> — Edit a draft\n"
+        "/approve <draft_id> — Approve a draft\n"
+        "/publish <draft_id> <target_chat_id> — Publish an approved draft (admin)\n"
+        "/schedule <draft_id> <target_chat_id> <UTC time> — Schedule a draft (admin)\n"
+        "/media_attach <draft_id> — Attach a replied photo/video\n"
+        "/media_clear <draft_id> — Remove draft media\n"
+        "/buttons_set <draft_id> Label | URL || Label 2 | URL 2 — Add URL buttons\n"
+        "/preview_set <draft_id> on|off — Control link previews\n"
+        "/watermark_set <draft_id> <text> — Set image watermark text\n"
         "/curate <content> — Classify content and draft a context intro\n"
         "/groupscan <niche>\nGroup Name | description | members — Evaluate groups\n"
         "/scout — Backward-compatible alias for /groupscan\n"
@@ -1878,6 +1889,11 @@ async def post_init(application: Application) -> None:
             BotCommand("approve", "Approve a draft"),
             BotCommand("publish", "Publish an approved draft"),
             BotCommand("schedule", "Schedule an approved draft"),
+            BotCommand("media_attach", "Attach media to a draft"),
+            BotCommand("media_clear", "Clear draft media"),
+            BotCommand("buttons_set", "Set draft URL buttons"),
+            BotCommand("preview_set", "Set link preview behavior"),
+            BotCommand("watermark_set", "Set image watermark"),
             BotCommand("channel_add", "Add a channel profile"),
             BotCommand("channel_list", "List channel profiles"),
             BotCommand("channel_remove", "Remove a channel profile"),
@@ -1929,6 +1945,11 @@ def main() -> None:
     application.add_handler(CommandHandler("approve", draft_approve_command))
     application.add_handler(CommandHandler("publish", draft_publish_command))
     application.add_handler(CommandHandler("schedule", draft_schedule_command))
+    application.add_handler(CommandHandler("media_attach", media_attach_command))
+    application.add_handler(CommandHandler("media_clear", media_clear_command))
+    application.add_handler(CommandHandler("buttons_set", buttons_set_command))
+    application.add_handler(CommandHandler("preview_set", preview_set_command))
+    application.add_handler(CommandHandler("watermark_set", watermark_set_command))
     application.add_handler(CommandHandler("channel_add", channel_add_command))
     application.add_handler(CommandHandler("channel_list", channel_list_command))
     application.add_handler(CommandHandler("channel_remove", channel_remove_command))
